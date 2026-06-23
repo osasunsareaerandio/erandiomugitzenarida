@@ -448,7 +448,11 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
 
 
 def main() -> None:
-    st.set_page_config(page_title="Evaluacion y seguimiento", layout="wide")
+    st.set_page_config(
+    page_title="Evaluación y seguimiento",
+    page_icon="logoerandiomugitenarida.png",
+    layout="wide"
+)
     if not authenticate():
         return
 
