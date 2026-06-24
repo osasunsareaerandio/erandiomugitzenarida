@@ -36,6 +36,9 @@ CONTACT_COLUMNS = [
 STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
 INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
+QUESTIONNAIRE_TYPES = {"promotora": "Persona Promotora", "participante": "Persona participante"}
+LIKERT_OPTIONS = [1, 2, 3, 4, 5]
+YES_NO_OPTIONS = ["Sin responder", "Sí", "No", "No procede"]
 
 # Paleta corporativa Erandio Mugitzen ari da!
 COLOR_NAVY = "#1C3054"
@@ -329,7 +332,7 @@ def clear_data_caches() -> None:
     """Limpia caches de datos tras guardar cambios para que la interfaz vea datos actualizados."""
     for fn in [
         get_evaluations, get_history, get_action_contacts, get_activity_documents,
-        get_contacts, get_access_log, load_contacts_and_assignments
+        get_contacts, get_access_log, get_questionnaire_responses, load_contacts_and_assignments
     ]:
         try:
             fn.clear()
@@ -577,6 +580,34 @@ def init_db(_engine: Engine) -> None:
             )
             """
         ))
+        response_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS questionnaire_responses (
+                response_id {response_id_type},
+                id_accion INTEGER NOT NULL,
+                questionnaire_type TEXT NOT NULL,
+                action_title TEXT,
+                respondent_name TEXT,
+                respondent_entity TEXT,
+                respondent_email TEXT,
+                rating_general INTEGER,
+                rating_usefulness INTEGER,
+                rating_clarity INTEGER,
+                objectives_met TEXT,
+                coordination TEXT,
+                participation TEXT,
+                learning TEXT,
+                positives TEXT,
+                difficulties TEXT,
+                improvements TEXT,
+                would_repeat TEXT,
+                would_recommend TEXT,
+                comments TEXT,
+                submitted_at TEXT NOT NULL
+            )
+            """
+        ))
     evaluation_extra_columns = {
         "updated_by": "TEXT",
         "link_promotora": "TEXT",
@@ -711,6 +742,202 @@ def delete_activity_document(engine: Engine, document_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM activity_documents WHERE document_id = :document_id"), {"document_id": int(document_id)})
     clear_data_caches()
+
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_questionnaire_responses(_engine: Engine, id_accion: int | None = None) -> pd.DataFrame:
+    engine = _engine
+    query = "SELECT * FROM questionnaire_responses"
+    params: dict[str, Any] = {}
+    if id_accion is not None:
+        query += " WHERE id_accion = :id_accion"
+        params["id_accion"] = int(id_accion)
+    query += " ORDER BY submitted_at DESC, response_id DESC"
+    try:
+        with engine.begin() as conn:
+            df = pd.read_sql_query(text(query), conn, params=params)
+    except Exception:
+        return pd.DataFrame(columns=[
+            "response_id", "id_accion", "questionnaire_type", "action_title", "respondent_name",
+            "respondent_entity", "respondent_email", "rating_general", "rating_usefulness",
+            "rating_clarity", "objectives_met", "coordination", "participation", "learning",
+            "positives", "difficulties", "improvements", "would_repeat", "would_recommend",
+            "comments", "submitted_at",
+        ])
+    return clean_interface_dataframe(df)
+
+
+def save_questionnaire_response(engine: Engine, payload: dict[str, Any]) -> None:
+    data = {**payload, "submitted_at": datetime.now().isoformat(timespec="seconds")}
+    fields = list(data.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO questionnaire_responses ({", ".join(fields)})
+                VALUES ({", ".join(":" + field for field in fields)})
+            """),
+            data,
+        )
+    clear_data_caches()
+
+
+def get_app_base_url() -> str:
+    return get_secret("APP_BASE_URL", "").strip().rstrip("/")
+
+
+def build_questionnaire_link(id_accion: int, questionnaire_type: str) -> str:
+    query = f"?eval={questionnaire_type}&id_accion={int(id_accion)}"
+    base_url = get_app_base_url()
+    return f"{base_url}{query}" if base_url else query
+
+
+def get_query_param(name: str, default: str = "") -> str:
+    try:
+        value = st.query_params.get(name, default)
+        if isinstance(value, list):
+            return str(value[0]) if value else default
+        return str(value) if value is not None else default
+    except Exception:
+        return default
+
+
+def render_public_questionnaire(engine: Engine) -> bool:
+    questionnaire_type = get_query_param("eval", "").strip().lower()
+    id_value = get_query_param("id_accion", "").strip()
+    if questionnaire_type not in QUESTIONNAIRE_TYPES or not id_value:
+        return False
+    try:
+        id_accion = int(id_value)
+    except ValueError:
+        st.error("El enlace de evaluación no es válido.")
+        return True
+
+    init_db(engine)
+    matrix = load_default_matrix()
+    action_rows = matrix[matrix["id_accion"] == id_accion]
+    if action_rows.empty:
+        st.error("No se ha encontrado la actividad asociada a este enlace.")
+        return True
+
+    action = action_rows.iloc[0]
+    title = safe_text(action.get("Título"))
+    scope = safe_text(action.get("Ámbito"))
+    q_label = QUESTIONNAIRE_TYPES[questionnaire_type]
+
+    render_login_title()
+    st.markdown(f"### Cuestionario de evaluación: {q_label}")
+    st.info(f"Actividad: {title}\n\nÁmbito: {scope}")
+
+    if st.session_state.get(f"questionnaire_submitted_{questionnaire_type}_{id_accion}"):
+        st.success("Respuesta registrada. Gracias por completar la evaluación.")
+        return True
+
+    with st.form(f"public_questionnaire_{questionnaire_type}_{id_accion}"):
+        if questionnaire_type == "promotora":
+            respondent_entity = st.text_input("Entidad o persona promotora")
+            respondent_name = st.text_input("Persona de contacto")
+            respondent_email = st.text_input("Email de contacto, opcional")
+            rating_general = st.select_slider("Valoración general", options=LIKERT_OPTIONS, value=4, help="1 = muy baja · 5 = muy alta")
+            objectives_met = st.selectbox("¿Se han cumplido los objetivos previstos?", YES_NO_OPTIONS)
+            coordination = st.select_slider("Coordinación con la Red Local de Salud", options=LIKERT_OPTIONS, value=4)
+            participation = st.text_area("Participación conseguida", placeholder="Número aproximado, perfil de participantes o valoración de la participación")
+            positives = st.text_area("Aspectos positivos")
+            difficulties = st.text_area("Dificultades encontradas")
+            improvements = st.text_area("Propuestas de mejora")
+            would_repeat = st.selectbox("¿Repetirías o recomendarías impulsar esta actividad de nuevo?", YES_NO_OPTIONS)
+            comments = st.text_area("Comentarios finales")
+            payload = {
+                "id_accion": id_accion,
+                "questionnaire_type": questionnaire_type,
+                "action_title": title,
+                "respondent_name": respondent_name,
+                "respondent_entity": respondent_entity,
+                "respondent_email": respondent_email,
+                "rating_general": int(rating_general),
+                "rating_usefulness": None,
+                "rating_clarity": None,
+                "objectives_met": objectives_met,
+                "coordination": str(coordination),
+                "participation": participation,
+                "learning": "",
+                "positives": positives,
+                "difficulties": difficulties,
+                "improvements": improvements,
+                "would_repeat": would_repeat,
+                "would_recommend": "",
+                "comments": comments,
+            }
+        else:
+            respondent_name = st.text_input("Nombre, opcional")
+            respondent_entity = st.text_input("Entidad, centro o grupo, opcional")
+            respondent_email = st.text_input("Email, opcional")
+            rating_general = st.select_slider("Valoración general de la actividad", options=LIKERT_OPTIONS, value=4)
+            rating_usefulness = st.select_slider("Utilidad de la actividad", options=LIKERT_OPTIONS, value=4)
+            rating_clarity = st.select_slider("Claridad de la información recibida", options=LIKERT_OPTIONS, value=4)
+            learning = st.text_area("¿Qué te llevas o qué has aprendido?")
+            improvements = st.text_area("¿Qué mejorarías?")
+            would_recommend = st.selectbox("¿Recomendarías esta actividad?", YES_NO_OPTIONS)
+            comments = st.text_area("Comentarios finales")
+            payload = {
+                "id_accion": id_accion,
+                "questionnaire_type": questionnaire_type,
+                "action_title": title,
+                "respondent_name": respondent_name,
+                "respondent_entity": respondent_entity,
+                "respondent_email": respondent_email,
+                "rating_general": int(rating_general),
+                "rating_usefulness": int(rating_usefulness),
+                "rating_clarity": int(rating_clarity),
+                "objectives_met": "",
+                "coordination": "",
+                "participation": "",
+                "learning": learning,
+                "positives": "",
+                "difficulties": "",
+                "improvements": improvements,
+                "would_repeat": "",
+                "would_recommend": would_recommend,
+                "comments": comments,
+            }
+        submitted = st.form_submit_button("Enviar evaluación")
+
+    if submitted:
+        save_questionnaire_response(engine, payload)
+        st.session_state[f"questionnaire_submitted_{questionnaire_type}_{id_accion}"] = True
+        st.success("Respuesta registrada. Gracias por completar la evaluación.")
+        st.rerun()
+    return True
+
+
+def render_questionnaire_results(engine: Engine, id_accion: int | None = None) -> None:
+    responses = get_questionnaire_responses(engine, id_accion)
+    st.markdown("### Respuestas de cuestionarios")
+    if responses.empty:
+        st.info("Todavía no hay respuestas de cuestionarios.")
+        return
+    responses = clean_interface_dataframe(responses)
+    label_map = {"promotora": "Persona Promotora", "participante": "Persona participante"}
+    responses["Tipo de cuestionario"] = responses["questionnaire_type"].map(label_map).fillna(responses["questionnaire_type"])
+    summary = responses.groupby("Tipo de cuestionario", dropna=False).size().reset_index(name="Respuestas")
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+    visible = [
+        "submitted_at", "Tipo de cuestionario", "action_title", "respondent_entity", "respondent_name",
+        "rating_general", "rating_usefulness", "rating_clarity", "objectives_met", "would_repeat",
+        "would_recommend", "comments",
+    ]
+    visible = [col for col in visible if col in responses.columns]
+    st.dataframe(responses[visible], use_container_width=True, hide_index=True)
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        responses.to_excel(writer, index=False, sheet_name="Cuestionarios")
+    st.download_button(
+        "Descargar respuestas de cuestionarios",
+        buffer.getvalue(),
+        "respuestas_cuestionarios.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"download_questionnaire_responses_{id_accion or 'all'}",
+    )
 
 
 def state_to_legacy_progress(state: str) -> int:
@@ -1612,10 +1839,14 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
 
         st.markdown("### Links de evaluación")
-        st.caption("Links para compartir cuestionarios o formularios de evaluación con personas o entidades.")
+        st.caption("La aplicación genera enlaces propios de cuestionario. Si configuras APP_BASE_URL en Secrets, el enlace aparecerá completo; si no, aparece como ruta relativa.")
+        generated_promotora = build_questionnaire_link(selected_id, "promotora")
+        generated_participante = build_questionnaire_link(selected_id, "participante")
+        st.code(f"Persona Promotora: {generated_promotora}")
+        st.code(f"Persona participante: {generated_participante}")
         l1, l2 = st.columns(2)
         with l1:
-            link_promotora = st.text_input("Persona Promotora - link", value=safe_text(row.get("link_promotora")), placeholder="Pega aquí el link para la entidad o persona promotora")
+            link_promotora = st.text_input("Persona Promotora - link", value=safe_text(row.get("link_promotora")) or generated_promotora, placeholder="Pega aquí el link para la entidad o persona promotora")
             link_promotora_enviado = st.checkbox("Enviado a Persona Promotora", value=bool(row.get("link_promotora_enviado") or False))
             promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
             try:
@@ -1624,7 +1855,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 promotora_date = date.today()
             link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
         with l2:
-            link_participante = st.text_input("Persona participante - link", value=safe_text(row.get("link_participante")), placeholder="Pega aquí el link para la persona participante")
+            link_participante = st.text_input("Persona participante - link", value=safe_text(row.get("link_participante")) or generated_participante, placeholder="Pega aquí el link para la persona participante")
             link_participante_enviado = st.checkbox("Enviado a Persona participante", value=bool(row.get("link_participante_enviado") or False))
             participante_fecha_value = safe_text(row.get("link_participante_fecha"))
             try:
@@ -1709,6 +1940,10 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                         st.success("Documento eliminado.")
                         st.rerun()
 
+
+    if st.session_state.get("role") == "admin":
+        render_questionnaire_results(engine, selected_id)
+
 def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> None:
     st.subheader("Administración")
     st.write("Estado de conexión:", "PostgreSQL/Supabase" if is_postgres(engine) else "SQLite local")
@@ -1721,6 +1956,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         st.info("Todavía no hay accesos registrados.")
     else:
         st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
+    render_questionnaire_results(engine)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
     buffer = io.BytesIO()
@@ -1728,6 +1964,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         data.to_excel(writer, index=False, sheet_name="Estado actual")
         history.to_excel(writer, index=False, sheet_name="Historico")
         get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
+        get_questionnaire_responses(engine).to_excel(writer, index=False, sheet_name="Cuestionarios")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -1798,6 +2035,8 @@ def main() -> None:
     """, unsafe_allow_html=True)
 
     engine = get_engine()
+    if render_public_questionnaire(engine):
+        return
     if not authenticate(engine):
         return
     init_db(engine)
