@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import os
 import re
@@ -32,10 +33,8 @@ CONTACT_COLUMNS = [
     "Categoria", "Subcategoria", "Comisión", "Perfil", "Entidad", "Teléfono", "Persona", "Mail",
 ]
 
-STATUS_OPTIONS = [
-    "Sin evaluar", "No iniciado", "Avance inicial", "Avance medio", "Avance alto", "Completado", "No procede",
-]
-INDICATOR_OPTIONS = ["Sin evaluar", "No iniciado", "Parcial", "Cumplido", "Sobrecumplido", "No procede"]
+STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
+INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
 
 # Paleta corporativa Erandio Mugitzen ari da!
@@ -410,6 +409,12 @@ def init_db(engine: Engine) -> None:
                 riesgos TEXT,
                 proximos_pasos TEXT,
                 prioridad TEXT,
+                link_promotora TEXT,
+                link_promotora_enviado INTEGER NOT NULL DEFAULT 0,
+                link_promotora_fecha TEXT,
+                link_participante TEXT,
+                link_participante_enviado INTEGER NOT NULL DEFAULT 0,
+                link_participante_fecha TEXT,
                 updated_by TEXT,
                 updated_at TEXT NOT NULL
             )
@@ -431,6 +436,12 @@ def init_db(engine: Engine) -> None:
                 riesgos TEXT,
                 proximos_pasos TEXT,
                 prioridad TEXT,
+                link_promotora TEXT,
+                link_promotora_enviado INTEGER NOT NULL DEFAULT 0,
+                link_promotora_fecha TEXT,
+                link_participante TEXT,
+                link_participante_enviado INTEGER NOT NULL DEFAULT 0,
+                link_participante_fecha TEXT,
                 updated_by TEXT,
                 updated_at TEXT NOT NULL
             )
@@ -465,10 +476,36 @@ def init_db(engine: Engine) -> None:
             )
             """
         ))
+        document_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS activity_documents (
+                document_id {document_id_type},
+                id_accion INTEGER NOT NULL,
+                filename TEXT NOT NULL,
+                mime_type TEXT,
+                size_bytes INTEGER,
+                content_base64 TEXT NOT NULL,
+                notes TEXT,
+                uploaded_by TEXT,
+                uploaded_at TEXT NOT NULL
+            )
+            """
+        ))
+    evaluation_extra_columns = {
+        "updated_by": "TEXT",
+        "link_promotora": "TEXT",
+        "link_promotora_enviado": "INTEGER NOT NULL DEFAULT 0",
+        "link_promotora_fecha": "TEXT",
+        "link_participante": "TEXT",
+        "link_participante_enviado": "INTEGER NOT NULL DEFAULT 0",
+        "link_participante_fecha": "TEXT",
+    }
     for table_name in ["evaluations", "evaluation_history"]:
-        if not column_exists(engine, table_name, "updated_by"):
-            with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN updated_by TEXT"))
+        for column_name, column_type in evaluation_extra_columns.items():
+            if not column_exists(engine, table_name, column_name):
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
 def get_evaluations(engine: Engine) -> pd.DataFrame:
@@ -478,7 +515,8 @@ def get_evaluations(engine: Engine) -> pd.DataFrame:
         return pd.DataFrame(columns=[
             "id_accion", "avance", "estado_evaluacion", "cumplimiento_indicadores", "valoracion_tecnica",
             "observaciones", "responsable_seguimiento", "fecha_actualizacion", "evidencias", "riesgos",
-            "proximos_pasos", "prioridad", "updated_by", "updated_at",
+            "proximos_pasos", "prioridad", "link_promotora", "link_promotora_enviado", "link_promotora_fecha",
+            "link_participante", "link_participante_enviado", "link_participante_fecha", "updated_by", "updated_at",
         ])
     df["id_accion"] = df["id_accion"].astype(int)
     return df
@@ -523,6 +561,65 @@ def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int]
                 {"id_accion": id_accion, "contacto_id": contacto_id, "assigned_by": user_name, "assigned_at": now},
             )
 
+
+
+
+def get_activity_documents(engine: Engine, id_accion: int | None = None) -> pd.DataFrame:
+    query = "SELECT * FROM activity_documents"
+    params: dict[str, Any] = {}
+    if id_accion is not None:
+        query += " WHERE id_accion = :id_accion"
+        params["id_accion"] = int(id_accion)
+    query += " ORDER BY uploaded_at DESC, document_id DESC"
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text(query), conn, params=params)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "document_id", "id_accion", "filename", "mime_type", "size_bytes", "content_base64",
+            "notes", "uploaded_by", "uploaded_at",
+        ])
+    df["document_id"] = df["document_id"].astype(int)
+    df["id_accion"] = df["id_accion"].astype(int)
+    return df
+
+
+def save_activity_documents(engine: Engine, id_accion: int, uploaded_files: list[Any], notes: str, user_name: str) -> int:
+    now = datetime.now().isoformat(timespec="seconds")
+    inserted = 0
+    with engine.begin() as conn:
+        for uploaded_file in uploaded_files:
+            raw = uploaded_file.getvalue()
+            conn.execute(
+                text("""
+                    INSERT INTO activity_documents (
+                        id_accion, filename, mime_type, size_bytes, content_base64, notes, uploaded_by, uploaded_at
+                    ) VALUES (
+                        :id_accion, :filename, :mime_type, :size_bytes, :content_base64, :notes, :uploaded_by, :uploaded_at
+                    )
+                """),
+                {
+                    "id_accion": int(id_accion),
+                    "filename": uploaded_file.name,
+                    "mime_type": getattr(uploaded_file, "type", "") or "application/octet-stream",
+                    "size_bytes": len(raw),
+                    "content_base64": base64.b64encode(raw).decode("ascii"),
+                    "notes": notes,
+                    "uploaded_by": user_name,
+                    "uploaded_at": now,
+                },
+            )
+            inserted += 1
+    return inserted
+
+
+def delete_activity_document(engine: Engine, document_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM activity_documents WHERE document_id = :document_id"), {"document_id": int(document_id)})
+
+
+def state_to_legacy_progress(state: str) -> int:
+    mapping = {"Sin evaluar": 0, "Iniciado": 50, "Completado": 100, "No procede": 0}
+    return mapping.get(state, 0)
 
 
 def normalize_contact_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -760,7 +857,9 @@ def merge_matrix_evaluations(matrix: pd.DataFrame, evaluations: pd.DataFrame) ->
             "avance": 0, "estado_evaluacion": "Sin evaluar", "cumplimiento_indicadores": "Sin evaluar",
             "valoracion_tecnica": "", "observaciones": "", "responsable_seguimiento": "",
             "fecha_actualizacion": "", "evidencias": "", "riesgos": "", "proximos_pasos": "",
-            "prioridad": "Media", "updated_by": "", "updated_at": "",
+            "prioridad": "Media", "link_promotora": "", "link_promotora_enviado": 0, "link_promotora_fecha": "",
+            "link_participante": "", "link_participante_enviado": 0, "link_participante_fecha": "",
+            "updated_by": "", "updated_at": "",
         }
         for col, value in defaults.items():
             merged[col] = value
@@ -848,7 +947,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         estados = multi_filter("Estado", "Estado original")
         tipos = multi_filter("Tipo", "Tipo")
         promotores = multi_filter("Agente promotor", "Agente promotor")
-        avance_min, avance_max = st.slider("Avance evaluado (%)", 0, 100, (0, 100))
+        estado_eval = st.multiselect("Estado de evaluación", STATUS_OPTIONS, default=STATUS_OPTIONS)
         texto = st.text_input("Buscar texto", placeholder="Título, descripción, indicadores...")
 
     filtered = df[
@@ -856,7 +955,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         & df["Estado"].isin(estados)
         & df["Tipo"].isin(tipos)
         & df["Agente promotor"].isin(promotores)
-        & df["avance"].fillna(0).between(avance_min, avance_max)
+        & df["estado_evaluacion"].fillna("Sin evaluar").isin(estado_eval)
     ].copy()
     if texto:
         haystack = filtered[["Título", "Descripción", "Indicadores", "Medida"]].fillna("").agg(" ".join, axis=1).str.lower()
@@ -867,7 +966,7 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 def render_dashboard(df: pd.DataFrame) -> None:
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Acciones filtradas", len(df))
-    col2.metric("Avance medio", f"{df['avance'].fillna(0).mean():.1f}%" if len(df) else "0%")
+    col2.metric("Iniciadas", int((df["estado_evaluacion"] == "Iniciado").sum()))
     col3.metric("Completadas", int((df["estado_evaluacion"] == "Completado").sum()))
     col4.metric("Sin evaluar", int((df["estado_evaluacion"].fillna("Sin evaluar") == "Sin evaluar").sum()))
 
@@ -885,15 +984,15 @@ def render_dashboard(df: pd.DataFrame) -> None:
             fig = px.pie(chart_data, names="estado_evaluacion", values="acciones", color_discrete_sequence=BRAND_COLORS)
             st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
-    st.subheader("Acciones con menor avance")
-    columns = ["id_accion", "Ámbito", "Título", "Estado", "avance", "estado_evaluacion", "responsable_seguimiento", "updated_by"]
-    st.dataframe(df.sort_values(["avance", "id_accion"])[columns].head(20), use_container_width=True, hide_index=True)
-
+    st.subheader("Acciones pendientes de completar")
+    columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
+    pending = df[df["estado_evaluacion"].fillna("Sin evaluar").isin(["Sin evaluar", "Iniciado"])]
+    st.dataframe(pending.sort_values(["estado_evaluacion", "id_accion"])[columns].head(20), use_container_width=True, hide_index=True)
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
         "id_accion", "Ámbito", "Título", "Tipo", "Estado", "Agente promotor", "Temporalidad",
-        "personas_red_asignadas", "num_personas_red", "avance",
+        "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
     st.dataframe(df[visible_columns], use_container_width=True, hide_index=True)
@@ -1108,16 +1207,16 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
     col1, col2, col3 = st.columns(3)
     col1.metric("Mediciones históricas", len(history_meta))
     col2.metric("Acciones con histórico", history_meta["id_accion"].nunique())
-    col3.metric("Último avance medio", f"{df['avance'].fillna(0).mean():.1f}%" if len(df) else "0%")
+    col3.metric("Completadas actualmente", int((df["estado_evaluacion"] == "Completado").sum()))
 
-    st.markdown("### Evolución global del avance medio")
-    global_series = history_meta.sort_values(["fecha_grafico", "updated_at_dt", "id"]).groupby("fecha_grafico", as_index=False)["avance"].mean()
-    fig = px.line(global_series, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=BRAND_COLORS)
+    st.markdown("### Evolución global por estado de evaluación")
+    global_series = history_meta.groupby(["fecha_grafico", "estado_evaluacion"], as_index=False).size().rename(columns={"size": "acciones"})
+    fig = px.line(global_series, x="fecha_grafico", y="acciones", color="estado_evaluacion", markers=True, labels={"acciones": "Nº de mediciones", "fecha_grafico": "Fecha", "estado_evaluacion": "Estado"}, color_discrete_sequence=BRAND_COLORS)
     st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
-    st.markdown("### Evolución media por ámbito")
-    scope_series = history_meta.sort_values(["fecha_grafico", "updated_at_dt", "id"]).groupby(["fecha_grafico", "Ámbito"], as_index=False)["avance"].mean()
-    fig = px.line(scope_series, x="fecha_grafico", y="avance", color="Ámbito", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=BRAND_COLORS)
+    st.markdown("### Estado de evaluación por ámbito")
+    scope_series = history_meta.groupby(["Ámbito", "estado_evaluacion"], as_index=False).size().rename(columns={"size": "acciones"})
+    fig = px.bar(scope_series, x="Ámbito", y="acciones", color="estado_evaluacion", barmode="group", labels={"acciones": "Nº de mediciones", "estado_evaluacion": "Estado"}, color_discrete_sequence=BRAND_COLORS)
     st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
     st.markdown("### Evolución de una acción concreta")
@@ -1128,15 +1227,12 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
     if action_history.empty:
         st.info("Esta acción todavía no tiene mediciones históricas.")
     else:
-        fig = px.line(action_history, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=[COLOR_CORAL])
-        st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
-        st.dataframe(action_history[["fecha_actualizacion", "avance", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by", "valoracion_tecnica", "observaciones", "riesgos", "proximos_pasos", "updated_at"]], use_container_width=True, hide_index=True)
+        st.dataframe(action_history[["fecha_actualizacion", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by", "valoracion_tecnica", "observaciones", "riesgos", "proximos_pasos", "link_promotora", "link_promotora_enviado", "link_promotora_fecha", "link_participante", "link_participante_enviado", "link_participante_fecha", "updated_at"]], use_container_width=True, hide_index=True)
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         history_meta.to_excel(writer, index=False, sheet_name="Historico")
     st.download_button("Descargar histórico en Excel", buffer.getvalue(), "historico_evaluacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 
 def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if df.empty:
@@ -1163,21 +1259,24 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         st.write(f"**Temporalidad:** {row.get('Temporalidad', '')}")
         st.write("**Descripción:**")
         st.write(row.get("Descripción", ""))
-        st.write("**Indicadores previstos:**")
-        st.write(row.get("Indicadores", ""))
+        st.write("**Indicadores previstos en la matriz:**")
+        indicadores_matriz = safe_text(row.get("Indicadores", ""))
+        st.info(indicadores_matriz or "Esta acción no tiene indicadores definidos en la matriz.")
         st.write("**Recursos:**")
         st.write(row.get("Recursos", ""))
 
-    current_avance = int(row["avance"]) if pd.notna(row.get("avance")) else 0
     current_estado = safe_text(row.get("estado_evaluacion")) or "Sin evaluar"
     current_cumplimiento = safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar"
     current_priority = safe_text(row.get("prioridad")) or "Media"
 
     with st.form("evaluation_form"):
         st.markdown("### Evaluación")
-        avance = st.slider("Avance (%)", 0, 100, current_avance)
         estado_evaluacion = st.selectbox("Estado de evaluación", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current_estado) if current_estado in STATUS_OPTIONS else 0)
-        cumplimiento = st.selectbox("Cumplimiento de indicadores", INDICATOR_OPTIONS, index=INDICATOR_OPTIONS.index(current_cumplimiento) if current_cumplimiento in INDICATOR_OPTIONS else 0)
+        st.markdown("#### Cumplimiento de indicadores")
+        st.caption("Indicadores definidos en la matriz")
+        st.info(indicadores_matriz or "Sin indicadores definidos en la matriz.")
+        cumplimiento = st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, index=INDICATOR_OPTIONS.index(current_cumplimiento) if current_cumplimiento in INDICATOR_OPTIONS else 0)
+
         prioridad = st.selectbox("Prioridad", PRIORITY_OPTIONS, index=PRIORITY_OPTIONS.index(current_priority) if current_priority in PRIORITY_OPTIONS else 1)
         responsable = st.text_input("Responsable de seguimiento", value=safe_text(row.get("responsable_seguimiento")))
         fecha_value = safe_text(row.get("fecha_actualizacion"))
@@ -1190,7 +1289,29 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         observaciones = st.text_area("Observaciones", value=safe_text(row.get("observaciones")), height=100)
         riesgos = st.text_area("Riesgos / bloqueos", value=safe_text(row.get("riesgos")), height=80)
         proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
-        evidencias = st.text_area("Evidencias / enlaces a documentos", value=safe_text(row.get("evidencias")), height=80, placeholder="Pega enlaces a Drive, actas, fotos, informes o evidencias relevantes")
+
+        st.markdown("### Links de evaluación")
+        st.caption("Links para compartir cuestionarios o formularios de evaluación con personas o entidades.")
+        l1, l2 = st.columns(2)
+        with l1:
+            link_promotora = st.text_input("Persona Promotora - link", value=safe_text(row.get("link_promotora")), placeholder="Pega aquí el link para la entidad o persona promotora")
+            link_promotora_enviado = st.checkbox("Enviado a Persona Promotora", value=bool(row.get("link_promotora_enviado") or False))
+            promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
+            try:
+                promotora_date = datetime.fromisoformat(promotora_fecha_value).date() if promotora_fecha_value else date.today()
+            except ValueError:
+                promotora_date = date.today()
+            link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
+        with l2:
+            link_participante = st.text_input("Persona participante - link", value=safe_text(row.get("link_participante")), placeholder="Pega aquí el link para la persona participante")
+            link_participante_enviado = st.checkbox("Enviado a Persona participante", value=bool(row.get("link_participante_enviado") or False))
+            participante_fecha_value = safe_text(row.get("link_participante_fecha"))
+            try:
+                participante_date = datetime.fromisoformat(participante_fecha_value).date() if participante_fecha_value else date.today()
+            except ValueError:
+                participante_date = date.today()
+            link_participante_fecha = st.date_input("Fecha de envío a Persona participante", value=participante_date)
+
         submitted = st.form_submit_button("Guardar evaluación")
 
     if submitted:
@@ -1199,22 +1320,73 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             return
         save_evaluation(engine, {
             "id_accion": selected_id,
-            "avance": avance,
+            "avance": state_to_legacy_progress(estado_evaluacion),
             "estado_evaluacion": estado_evaluacion,
             "cumplimiento_indicadores": cumplimiento,
             "valoracion_tecnica": valoracion,
             "observaciones": observaciones,
             "responsable_seguimiento": responsable,
             "fecha_actualizacion": fecha_actualizacion.isoformat(),
-            "evidencias": evidencias,
+            "evidencias": "",
             "riesgos": riesgos,
             "proximos_pasos": proximos_pasos,
             "prioridad": prioridad,
+            "link_promotora": link_promotora,
+            "link_promotora_enviado": int(link_promotora_enviado),
+            "link_promotora_fecha": link_promotora_fecha.isoformat() if link_promotora_enviado else "",
+            "link_participante": link_participante,
+            "link_participante_enviado": int(link_participante_enviado),
+            "link_participante_fecha": link_participante_fecha.isoformat() if link_participante_enviado else "",
             "updated_by": user_name,
         })
         st.success("Evaluación guardada y añadida al histórico.")
         st.rerun()
 
+    st.markdown("### Repositorio documental de la actividad")
+    st.caption("Sube imágenes, actas, documentos o evidencias vinculadas a esta acción. Los archivos se guardan en la base de datos de la aplicación.")
+    uploaded_docs = st.file_uploader(
+        "Añadir imágenes o documentos",
+        type=["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg", "webp", "txt"],
+        accept_multiple_files=True,
+        key=f"activity_docs_{selected_id}",
+    )
+    doc_notes = st.text_input("Nota para los archivos", key=f"activity_docs_notes_{selected_id}")
+    if st.button("Guardar documentos", key=f"save_activity_docs_{selected_id}"):
+        if not user_name:
+            st.error("Antes de subir documentos, escribe tu nombre en la barra lateral.")
+        elif not uploaded_docs:
+            st.error("Selecciona al menos un archivo.")
+        else:
+            inserted = save_activity_documents(engine, selected_id, uploaded_docs, doc_notes, user_name)
+            st.success(f"Documentos guardados: {inserted}")
+            st.rerun()
+
+    docs = get_activity_documents(engine, selected_id)
+    if docs.empty:
+        st.info("Todavía no hay documentos o imágenes vinculados a esta acción.")
+    else:
+        st.write(f"Documentos guardados: {len(docs)}")
+        for _, doc in docs.iterrows():
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 2, 1])
+                c1.write(f"**{safe_text(doc.get('filename'))}**")
+                c1.caption(f"Subido por {safe_text(doc.get('uploaded_by')) or 'sin identificar'} · {safe_text(doc.get('uploaded_at'))}")
+                if safe_text(doc.get("notes")):
+                    c1.write(safe_text(doc.get("notes")))
+                c2.write(f"{int(doc.get('size_bytes') or 0) / 1024:.1f} KB")
+                raw = base64.b64decode(safe_text(doc.get("content_base64")) or "")
+                c2.download_button(
+                    "Descargar",
+                    data=raw,
+                    file_name=safe_text(doc.get("filename")) or "documento",
+                    mime=safe_text(doc.get("mime_type")) or "application/octet-stream",
+                    key=f"download_doc_{int(doc['document_id'])}",
+                )
+                with c3:
+                    if st.button("Eliminar", key=f"delete_doc_{int(doc['document_id'])}"):
+                        delete_activity_document(engine, int(doc["document_id"]))
+                        st.success("Documento eliminado.")
+                        st.rerun()
 
 def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> None:
     st.subheader("Administración")
@@ -1257,10 +1429,17 @@ def main() -> None:
     assignments = get_action_contacts(engine)
     data = merge_matrix_evaluations(matrix, evaluations)
     data = merge_assignments(data, assignments, contacts)
-    data["avance"] = data["avance"].fillna(0).astype(int)
+    data["avance"] = data.get("avance", pd.Series([0] * len(data))).fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
     data["cumplimiento_indicadores"] = data["cumplimiento_indicadores"].fillna("Sin evaluar")
     data["prioridad"] = data["prioridad"].fillna("Media")
+    for optional_col, default_value in {
+        "link_promotora": "", "link_promotora_enviado": 0, "link_promotora_fecha": "",
+        "link_participante": "", "link_participante_enviado": 0, "link_participante_fecha": "",
+    }.items():
+        if optional_col not in data.columns:
+            data[optional_col] = default_value
+        data[optional_col] = data[optional_col].fillna(default_value)
 
     filtered = filter_dataframe(data)
     tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"])
