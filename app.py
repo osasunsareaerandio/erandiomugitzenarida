@@ -16,12 +16,17 @@ from sqlalchemy.engine import Engine
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DEFAULT_EXCEL = DATA_DIR / "Matriz Acciones Fase II.xlsx"
+CONTACTS_EXCEL = DATA_DIR / "Contactos.xlsx"
 DEFAULT_SHEET = "MATRIZ Evaluación"
 LOCAL_SQLITE = f"sqlite:///{APP_DIR / 'evaluacion.db'}"
 
 BASE_COLUMNS = [
     "Ámbito", "Título", "Tipo", "Estado", "Medida", "Agente promotor",
     "Descripción", "Personas destinatarias", "Temporalidad", "Indicadores", "Recursos",
+]
+
+CONTACT_COLUMNS = [
+    "Categoria", "Subcategoria", "Comisión", "Perfil", "Entidad", "Teléfono", "Persona", "Mail",
 ]
 
 STATUS_OPTIONS = [
@@ -76,6 +81,48 @@ def read_excel_bytes(file_bytes: bytes) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_default_matrix() -> pd.DataFrame:
     return read_excel_bytes(DEFAULT_EXCEL.read_bytes())
+
+
+@st.cache_data(show_spinner=False)
+def read_contacts_bytes(file_bytes: bytes) -> pd.DataFrame:
+    excel_file = pd.ExcelFile(io.BytesIO(file_bytes))
+    sheet_name = "Hoja1" if "Hoja1" in excel_file.sheet_names else excel_file.sheet_names[0]
+    df = pd.read_excel(excel_file, sheet_name=sheet_name).dropna(how="all").copy()
+    df.columns = [normalize_column_name(c) for c in df.columns]
+    df = df.drop(columns=[c for c in df.columns if c.lower().startswith("unnamed")], errors="ignore")
+    for col in CONTACT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[CONTACT_COLUMNS + [c for c in df.columns if c not in CONTACT_COLUMNS]].copy()
+    df.insert(0, "contacto_id", range(1, len(df) + 1))
+    df["contacto_id"] = df["contacto_id"].astype(int)
+    for col in df.columns:
+        if col != "contacto_id":
+            df[col] = df[col].apply(safe_text)
+    df["contacto_label"] = df.apply(make_contact_label, axis=1)
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def load_default_contacts() -> pd.DataFrame:
+    if not CONTACTS_EXCEL.exists():
+        return pd.DataFrame(columns=["contacto_id", *CONTACT_COLUMNS, "contacto_label"])
+    return read_contacts_bytes(CONTACTS_EXCEL.read_bytes())
+
+
+def make_contact_label(row: pd.Series) -> str:
+    persona = safe_text(row.get("Persona")) or "Sin persona"
+    entidad = safe_text(row.get("Entidad"))
+    comision = safe_text(row.get("Comisión"))
+    perfil = safe_text(row.get("Perfil"))
+    parts = [persona]
+    if entidad:
+        parts.append(entidad)
+    if comision:
+        parts.append(comision)
+    if perfil:
+        parts.append(perfil)
+    return " | ".join(parts)
 
 
 @st.cache_resource(show_spinner=False)
@@ -148,6 +195,17 @@ def init_db(engine: Engine) -> None:
             )
             """
         ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS action_contacts (
+                id_accion INTEGER NOT NULL,
+                contacto_id INTEGER NOT NULL,
+                assigned_by TEXT,
+                assigned_at TEXT NOT NULL,
+                PRIMARY KEY (id_accion, contacto_id)
+            )
+            """
+        ))
     for table_name in ["evaluations", "evaluation_history"]:
         if not column_exists(engine, table_name, "updated_by"):
             with engine.begin() as conn:
@@ -181,6 +239,59 @@ def get_history(engine: Engine) -> pd.DataFrame:
     df["fecha_actualizacion_dt"] = pd.to_datetime(df["fecha_actualizacion"], errors="coerce")
     df["updated_at_dt"] = pd.to_datetime(df["updated_at"], errors="coerce")
     return df
+
+
+def get_action_contacts(engine: Engine) -> pd.DataFrame:
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM action_contacts"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=["id_accion", "contacto_id", "assigned_by", "assigned_at"])
+    df["id_accion"] = df["id_accion"].astype(int)
+    df["contacto_id"] = df["contacto_id"].astype(int)
+    return df
+
+
+def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM action_contacts WHERE id_accion = :id_accion"), {"id_accion": id_accion})
+        for contacto_id in sorted(set(int(x) for x in contacto_ids)):
+            conn.execute(
+                text("""
+                    INSERT INTO action_contacts (id_accion, contacto_id, assigned_by, assigned_at)
+                    VALUES (:id_accion, :contacto_id, :assigned_by, :assigned_at)
+                """),
+                {"id_accion": id_accion, "contacto_id": contacto_id, "assigned_by": user_name, "assigned_at": now},
+            )
+
+
+def build_assignment_summary(assignments: pd.DataFrame, contacts: pd.DataFrame) -> pd.DataFrame:
+    if assignments.empty or contacts.empty:
+        return pd.DataFrame(columns=["id_accion", "personas_red_asignadas", "num_personas_red"])
+    merged = assignments.merge(
+        contacts[["contacto_id", "Persona", "Entidad", "Comisión", "Perfil", "contacto_label"]],
+        on="contacto_id",
+        how="left",
+    )
+    summary = merged.groupby("id_accion").agg(
+        personas_red_asignadas=("contacto_label", lambda values: "; ".join([safe_text(v) for v in values if safe_text(v)])),
+        num_personas_red=("contacto_id", "nunique"),
+    ).reset_index()
+    summary["id_accion"] = summary["id_accion"].astype(int)
+    return summary
+
+
+def merge_assignments(data: pd.DataFrame, assignments: pd.DataFrame, contacts: pd.DataFrame) -> pd.DataFrame:
+    summary = build_assignment_summary(assignments, contacts)
+    if summary.empty:
+        data = data.copy()
+        data["personas_red_asignadas"] = ""
+        data["num_personas_red"] = 0
+        return data
+    merged = data.merge(summary, on="id_accion", how="left")
+    merged["personas_red_asignadas"] = merged["personas_red_asignadas"].fillna("")
+    merged["num_personas_red"] = merged["num_personas_red"].fillna(0).astype(int)
+    return merged
 
 
 def save_evaluation(engine: Engine, data: dict[str, Any]) -> None:
@@ -300,17 +411,103 @@ def render_dashboard(df: pd.DataFrame) -> None:
     st.dataframe(df.sort_values(["avance", "id_accion"])[columns].head(20), use_container_width=True, hide_index=True)
 
 
-def render_matrix(df: pd.DataFrame) -> None:
+def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
-        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "Agente promotor", "Temporalidad", "avance",
+        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "Agente promotor", "Temporalidad",
+        "personas_red_asignadas", "num_personas_red", "avance",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
     st.dataframe(df[visible_columns], use_container_width=True, hide_index=True)
+
+    st.markdown("### Asignar personas de la Red Local de Salud")
+    if contacts.empty:
+        st.info("No se ha encontrado el archivo data/Contactos.xlsx o no contiene contactos.")
+    elif df.empty:
+        st.info("No hay acciones para los filtros seleccionados.")
+    else:
+        options = df.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
+        selected = st.selectbox("Selecciona una acción para asignar personas", options, key="matrix_assignment_action")
+        selected_id = int(selected.split(" - ")[0])
+        current_ids = assignments.loc[assignments["id_accion"] == selected_id, "contacto_id"].astype(int).tolist() if not assignments.empty else []
+        label_by_id = dict(zip(contacts["contacto_id"], contacts["contacto_label"]))
+        contact_options = contacts["contacto_id"].astype(int).tolist()
+        selected_contacts = st.multiselect(
+            "Personas asignadas",
+            contact_options,
+            default=[cid for cid in current_ids if cid in set(contact_options)],
+            format_func=lambda cid: label_by_id.get(cid, str(cid)),
+            key="matrix_assignment_contacts",
+        )
+        if st.button("Guardar asignación de personas", key="save_matrix_assignment"):
+            if not user_name:
+                st.error("Antes de guardar, escribe tu nombre en la barra lateral.")
+            else:
+                save_action_contacts(engine, selected_id, selected_contacts, user_name)
+                st.success("Asignación guardada.")
+                st.rerun()
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Evaluacion")
     st.download_button(
         "Descargar evaluación filtrada en Excel", buffer.getvalue(), "evaluacion_filtrada.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.DataFrame) -> None:
+    st.subheader("Red Local de Salud")
+    if contacts.empty:
+        st.info("No se ha encontrado el archivo data/Contactos.xlsx o no contiene contactos.")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Contactos", len(contacts))
+    col2.metric("Entidades", contacts["Entidad"].replace("", pd.NA).dropna().nunique())
+    col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique())
+    col4.metric("Contactos asignados", assignments["contacto_id"].nunique() if not assignments.empty else 0)
+
+    with st.expander("Filtros", expanded=True):
+        c1, c2, c3, c4 = st.columns(4)
+        categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]))
+        comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]))
+        perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]))
+        texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
+
+    filtered = contacts.copy()
+    if categoria:
+        filtered = filtered[filtered["Categoria"].isin(categoria)]
+    if comision:
+        filtered = filtered[filtered["Comisión"].isin(comision)]
+    if perfil:
+        filtered = filtered[filtered["Perfil"].isin(perfil)]
+    if texto:
+        haystack = filtered[["Persona", "Entidad", "Mail", "Teléfono", "Comisión", "Categoria", "Subcategoria"]].fillna("").agg(" ".join, axis=1).str.lower()
+        filtered = filtered[haystack.str.contains(texto.lower(), regex=False)]
+
+    if not assignments.empty:
+        assigned_meta = assignments.merge(data[["id_accion", "Título", "Ámbito"]], on="id_accion", how="left")
+        assigned_text = assigned_meta.groupby("contacto_id").agg(
+            acciones_asignadas=("Título", lambda values: "; ".join([safe_text(v) for v in values if safe_text(v)])),
+            num_acciones=("id_accion", "nunique"),
+        ).reset_index()
+        filtered = filtered.merge(assigned_text, on="contacto_id", how="left")
+    else:
+        filtered["acciones_asignadas"] = ""
+        filtered["num_acciones"] = 0
+    filtered["acciones_asignadas"] = filtered["acciones_asignadas"].fillna("")
+    filtered["num_acciones"] = filtered["num_acciones"].fillna(0).astype(int)
+
+    visible = ["contacto_id", "Categoria", "Subcategoria", "Comisión", "Perfil", "Entidad", "Persona", "Teléfono", "Mail", "num_acciones", "acciones_asignadas"]
+    st.dataframe(filtered[visible], use_container_width=True, hide_index=True)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        filtered[visible].to_excel(writer, index=False, sheet_name="Red Local Salud")
+    st.download_button(
+        "Descargar contactos filtrados en Excel",
+        buffer.getvalue(),
+        "red_local_salud_contactos.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -372,6 +569,9 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     meta1.write(f"**Ámbito:** {row['Ámbito']}")
     meta2.write(f"**Tipo:** {row['Tipo']}")
     meta3.write(f"**Estado original:** {row['Estado']}")
+    personas_asignadas = safe_text(row.get("personas_red_asignadas"))
+    if personas_asignadas:
+        st.info(f"Personas de la Red Local asignadas: {personas_asignadas}")
 
     with st.expander("Información de la acción", expanded=True):
         st.write(f"**Medida:** {row.get('Medida', '')}")
@@ -448,11 +648,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
 
 
 def main() -> None:
-    st.set_page_config(
-    page_title="Evaluación y seguimiento",
-    page_icon="logoerandiomugitenarida.png",
-    layout="wide"
-)
+    st.set_page_config(page_title="Evaluacion y seguimiento", layout="wide")
     if not authenticate():
         return
 
@@ -471,23 +667,28 @@ def main() -> None:
     matrix = read_excel_bytes(uploaded.getvalue()) if uploaded is not None else load_default_matrix()
     evaluations = get_evaluations(engine)
     history = get_history(engine)
+    contacts = load_default_contacts()
+    assignments = get_action_contacts(engine)
     data = merge_matrix_evaluations(matrix, evaluations)
+    data = merge_assignments(data, assignments, contacts)
     data["avance"] = data["avance"].fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
     data["cumplimiento_indicadores"] = data["cumplimiento_indicadores"].fillna("Sin evaluar")
     data["prioridad"] = data["prioridad"].fillna("Media")
 
     filtered = filter_dataframe(data)
-    tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Evolución", "Administración"])
+    tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"])
     with tabs[0]:
         render_dashboard(filtered)
     with tabs[1]:
-        render_matrix(filtered)
+        render_matrix(filtered, data, contacts, assignments, user_name, engine)
     with tabs[2]:
         render_action_detail(filtered, data, user_name, engine)
     with tabs[3]:
-        render_evolution(filtered, data, history)
+        render_contacts(contacts, assignments, data)
     with tabs[4]:
+        render_evolution(filtered, data, history)
+    with tabs[5]:
         render_admin(data, history, engine)
 
 
