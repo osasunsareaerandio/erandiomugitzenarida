@@ -325,6 +325,18 @@ def get_secret(name: str, default: str = "") -> str:
         return os.environ.get(name, default)
 
 
+def clear_data_caches() -> None:
+    """Limpia caches de datos tras guardar cambios para que la interfaz vea datos actualizados."""
+    for fn in [
+        get_evaluations, get_history, get_action_contacts, get_activity_documents,
+        get_contacts, get_access_log, load_contacts_and_assignments
+    ]:
+        try:
+            fn.clear()
+        except Exception:
+            pass
+
+
 def safe_text(value: Any) -> str:
     """Devuelve texto limpio para la interfaz.
 
@@ -450,7 +462,9 @@ def column_exists(engine: Engine, table_name: str, column_name: str) -> bool:
         return any(row[1] == column_name for row in rows)
 
 
-def init_db(engine: Engine) -> None:
+@st.cache_resource(show_spinner=False)
+def init_db(_engine: Engine) -> None:
+    engine = _engine
     history_id = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
     with engine.begin() as conn:
         conn.execute(text(
@@ -579,7 +593,9 @@ def init_db(engine: Engine) -> None:
                     conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
 
 
-def get_evaluations(engine: Engine) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_evaluations(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
     with engine.begin() as conn:
         df = pd.read_sql_query(text("SELECT * FROM evaluations"), conn)
     if df.empty:
@@ -593,7 +609,9 @@ def get_evaluations(engine: Engine) -> pd.DataFrame:
     return df
 
 
-def get_history(engine: Engine) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_history(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
     with engine.begin() as conn:
         df = pd.read_sql_query(text("SELECT * FROM evaluation_history ORDER BY updated_at ASC, id ASC"), conn)
     if df.empty:
@@ -609,7 +627,9 @@ def get_history(engine: Engine) -> pd.DataFrame:
     return df
 
 
-def get_action_contacts(engine: Engine) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_action_contacts(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
     with engine.begin() as conn:
         df = pd.read_sql_query(text("SELECT * FROM action_contacts"), conn)
     if df.empty:
@@ -631,11 +651,14 @@ def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int]
                 """),
                 {"id_accion": id_accion, "contacto_id": contacto_id, "assigned_by": user_name, "assigned_at": now},
             )
+    clear_data_caches()
 
 
 
 
-def get_activity_documents(engine: Engine, id_accion: int | None = None) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_activity_documents(_engine: Engine, id_accion: int | None = None) -> pd.DataFrame:
+    engine = _engine
     query = "SELECT * FROM activity_documents"
     params: dict[str, Any] = {}
     if id_accion is not None:
@@ -680,12 +703,14 @@ def save_activity_documents(engine: Engine, id_accion: int, uploaded_files: list
                 },
             )
             inserted += 1
+    clear_data_caches()
     return inserted
 
 
 def delete_activity_document(engine: Engine, document_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM activity_documents WHERE document_id = :document_id"), {"document_id": int(document_id)})
+    clear_data_caches()
 
 
 def state_to_legacy_progress(state: str) -> int:
@@ -816,10 +841,13 @@ def import_contacts_dataframe(engine: Engine, contacts_df: pd.DataFrame, user_na
                 payload,
             )
             inserted += 1
+    clear_data_caches()
     return inserted
 
 
-def get_contacts(engine: Engine) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_contacts(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
     with engine.begin() as conn:
         raw = pd.read_sql_query(text("SELECT * FROM contacts ORDER BY contacto_id ASC"), conn)
     return normalize_contact_dataframe(raw)
@@ -838,6 +866,7 @@ def add_contact(engine: Engine, data: dict[str, Any], user_name: str) -> None:
             """),
             payload,
         )
+    clear_data_caches()
 
 
 def update_contacts(engine: Engine, contacts_df: pd.DataFrame, user_name: str) -> None:
@@ -864,12 +893,14 @@ def update_contacts(engine: Engine, contacts_df: pd.DataFrame, user_name: str) -
                 """),
                 payload,
             )
+    clear_data_caches()
 
 
 def delete_contact(engine: Engine, contacto_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM action_contacts WHERE contacto_id = :contacto_id"), {"contacto_id": contacto_id})
         conn.execute(text("DELETE FROM contacts WHERE contacto_id = :contacto_id"), {"contacto_id": contacto_id})
+    clear_data_caches()
 
 
 def build_assignment_summary(assignments: pd.DataFrame, contacts: pd.DataFrame) -> pd.DataFrame:
@@ -919,6 +950,7 @@ def save_evaluation(engine: Engine, data: dict[str, Any]) -> None:
     with engine.begin() as conn:
         conn.execute(sql_current, payload)
         conn.execute(sql_history, payload)
+    clear_data_caches()
 
 
 def merge_matrix_evaluations(matrix: pd.DataFrame, evaluations: pd.DataFrame) -> pd.DataFrame:
@@ -997,7 +1029,9 @@ def log_access(engine: Engine, perfil: str, role: str, scope: str | None) -> Non
         pass
 
 
-def get_access_log(engine: Engine) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner=False)
+def get_access_log(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
     try:
         with engine.begin() as conn:
             return pd.read_sql_query(text("SELECT * FROM access_log ORDER BY logged_at DESC"), conn)
@@ -1034,6 +1068,7 @@ def authenticate(engine: Engine) -> bool:
             st.session_state["role"] = config["role"]
             st.session_state["scope"] = config.get("scope")
             st.session_state["user_name"] = profile_name
+            init_db(engine)
             log_access(engine, profile_name, config["role"], config.get("scope"))
             st.rerun()
         else:
@@ -1668,7 +1703,9 @@ def render_navigation(available_pages: list[str]) -> str:
     )
 
 
-def load_contacts_and_assignments(engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+@st.cache_data(ttl=300, show_spinner=False)
+def load_contacts_and_assignments(_engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+    engine = _engine
     seed_contacts_if_empty(engine)
     contacts = clean_interface_dataframe(get_contacts(engine))
     assignments = clean_interface_dataframe(get_action_contacts(engine))
@@ -1713,9 +1750,9 @@ def main() -> None:
     """, unsafe_allow_html=True)
 
     engine = get_engine()
-    init_db(engine)
     if not authenticate(engine):
         return
+    init_db(engine)
 
     render_sidebar_logo()
     user_name = sidebar_user()
@@ -1724,7 +1761,7 @@ def main() -> None:
     with st.sidebar:
         st.header("Datos")
         uploaded = st.file_uploader("Sustituir matriz Excel en esta sesión", type=["xlsx"])
-        st.caption("La matriz base se mantiene en data/. Para ir más rápido, la app solo carga cada bloque cuando se abre.")
+        st.caption("Modo rápido: los datos se cachean unos minutos y se actualizan al guardar cambios.")
 
     matrix = read_excel_bytes(uploaded.getvalue()) if uploaded is not None else load_default_matrix()
     evaluations = clean_interface_dataframe(get_evaluations(engine))
