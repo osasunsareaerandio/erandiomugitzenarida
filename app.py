@@ -38,6 +38,7 @@ INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
 QUESTIONNAIRE_TYPES = {"promotora": "Persona Promotora", "participante": "Persona participante"}
 LIKERT_OPTIONS = [1, 2, 3, 4, 5]
+LIKERT_SELECT_OPTIONS = ["Sin marcar", 1, 2, 3, 4, 5]
 YES_NO_OPTIONS = ["Sin responder", "Sí", "No", "No procede"]
 
 # Paleta corporativa Erandio Mugitzen ari da!
@@ -371,6 +372,14 @@ def clean_interface_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 def normalize_column_name(value: Any) -> str:
     return str(value).replace("\n", " ").strip()
+
+
+def likert_value(value: Any) -> int | None:
+    """Convierte una selección de escala a entero; deja vacío si no se ha marcado."""
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 @st.cache_data(show_spinner=False)
@@ -838,9 +847,11 @@ def render_public_questionnaire(engine: Engine) -> bool:
             respondent_entity = st.text_input("Entidad o persona promotora")
             respondent_name = st.text_input("Persona de contacto")
             respondent_email = st.text_input("Email de contacto, opcional")
-            rating_general = st.select_slider("Valoración general", options=LIKERT_OPTIONS, value=4, help="1 = muy baja · 5 = muy alta")
+            rating_general = st.selectbox("Valoración general de la actividad", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
+            rating_usefulness = st.selectbox("Utilidad de la actividad", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
+            rating_clarity = st.selectbox("Claridad de la información recibida", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
             objectives_met = st.selectbox("¿Se han cumplido los objetivos previstos?", YES_NO_OPTIONS)
-            coordination = st.select_slider("Coordinación con la Red Local de Salud", options=LIKERT_OPTIONS, value=4)
+            coordination = st.selectbox("Coordinación con la Red Local de Salud", LIKERT_SELECT_OPTIONS, index=0)
             participation = st.text_area("Participación conseguida", placeholder="Número aproximado, perfil de participantes o valoración de la participación")
             positives = st.text_area("Aspectos positivos")
             difficulties = st.text_area("Dificultades encontradas")
@@ -854,11 +865,11 @@ def render_public_questionnaire(engine: Engine) -> bool:
                 "respondent_name": respondent_name,
                 "respondent_entity": respondent_entity,
                 "respondent_email": respondent_email,
-                "rating_general": int(rating_general),
-                "rating_usefulness": None,
-                "rating_clarity": None,
+                "rating_general": likert_value(rating_general),
+                "rating_usefulness": likert_value(rating_usefulness),
+                "rating_clarity": likert_value(rating_clarity),
                 "objectives_met": objectives_met,
-                "coordination": str(coordination),
+                "coordination": "" if coordination == "Sin marcar" else str(coordination),
                 "participation": participation,
                 "learning": "",
                 "positives": positives,
@@ -872,9 +883,9 @@ def render_public_questionnaire(engine: Engine) -> bool:
             respondent_name = st.text_input("Nombre, opcional")
             respondent_entity = st.text_input("Entidad, centro o grupo, opcional")
             respondent_email = st.text_input("Email, opcional")
-            rating_general = st.select_slider("Valoración general de la actividad", options=LIKERT_OPTIONS, value=4)
-            rating_usefulness = st.select_slider("Utilidad de la actividad", options=LIKERT_OPTIONS, value=4)
-            rating_clarity = st.select_slider("Claridad de la información recibida", options=LIKERT_OPTIONS, value=4)
+            rating_general = st.selectbox("Valoración general de la actividad", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
+            rating_usefulness = st.selectbox("Utilidad de la actividad", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
+            rating_clarity = st.selectbox("Claridad de la información recibida", LIKERT_SELECT_OPTIONS, index=0, help="1 = muy baja · 5 = muy alta")
             learning = st.text_area("¿Qué te llevas o qué has aprendido?")
             improvements = st.text_area("¿Qué mejorarías?")
             would_recommend = st.selectbox("¿Recomendarías esta actividad?", YES_NO_OPTIONS)
@@ -886,9 +897,9 @@ def render_public_questionnaire(engine: Engine) -> bool:
                 "respondent_name": respondent_name,
                 "respondent_entity": respondent_entity,
                 "respondent_email": respondent_email,
-                "rating_general": int(rating_general),
-                "rating_usefulness": int(rating_usefulness),
-                "rating_clarity": int(rating_clarity),
+                "rating_general": likert_value(rating_general),
+                "rating_usefulness": likert_value(rating_usefulness),
+                "rating_clarity": likert_value(rating_clarity),
                 "objectives_met": "",
                 "coordination": "",
                 "participation": "",
@@ -2093,12 +2104,7 @@ def main() -> None:
     user_name = sidebar_user()
     render_internal_header()
 
-    with st.sidebar:
-        st.header("Datos")
-        uploaded = st.file_uploader("Sustituir matriz Excel en esta sesión", type=["xlsx"])
-        st.caption("Modo rápido: los datos se cachean unos minutos y se actualizan al guardar cambios.")
-
-    matrix = read_excel_bytes(uploaded.getvalue()) if uploaded is not None else load_default_matrix()
+    matrix = load_default_matrix()
     evaluations = clean_interface_dataframe(get_evaluations(engine))
     data = merge_matrix_evaluations(matrix, evaluations)
     data = clean_interface_dataframe(data)
