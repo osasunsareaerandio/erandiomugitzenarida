@@ -1648,10 +1648,70 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+
+def render_navigation(available_pages: list[str]) -> str:
+    """Navegación rápida.
+
+    Se usa radio horizontal en lugar de st.tabs porque st.tabs ejecuta el contenido
+    de todas las pestañas en cada interacción. Esta navegación solo calcula la
+    página activa, por lo que reduce consultas a Supabase y acelera la app.
+    """
+    st.markdown("""
+    <div class="nav-helper">Selecciona el apartado de trabajo</div>
+    """, unsafe_allow_html=True)
+    return st.radio(
+        "Apartado",
+        available_pages,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="main_navigation",
+    )
+
+
+def load_contacts_and_assignments(engine: Engine) -> tuple[pd.DataFrame, pd.DataFrame]:
+    seed_contacts_if_empty(engine)
+    contacts = clean_interface_dataframe(get_contacts(engine))
+    assignments = clean_interface_dataframe(get_action_contacts(engine))
+    return contacts, assignments
+
+
 def main() -> None:
     page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
     st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
     apply_brand_theme()
+    st.markdown("""
+    <style>
+    .nav-helper {
+        color: #1C3054;
+        font-size: 0.92rem;
+        font-weight: 700;
+        margin-top: 0.25rem;
+        margin-bottom: 0.4rem;
+    }
+    div[role="radiogroup"] {
+        gap: 0.65rem !important;
+        flex-wrap: wrap !important;
+        margin-bottom: 1.1rem !important;
+    }
+    div[role="radiogroup"] label {
+        background: #FFFFFF !important;
+        border: 1px solid rgba(28, 48, 84, 0.20) !important;
+        border-radius: 999px !important;
+        padding: 0.52rem 0.86rem !important;
+        margin-right: 0.2rem !important;
+        box-shadow: 0 1px 5px rgba(28, 48, 84, 0.06) !important;
+    }
+    div[role="radiogroup"] label:hover {
+        border-color: #32A4CF !important;
+        background: rgba(50, 164, 207, 0.08) !important;
+    }
+    div[role="radiogroup"] label span {
+        color: #1C3054 !important;
+        font-weight: 650 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     engine = get_engine()
     init_db(engine)
     if not authenticate(engine):
@@ -1659,26 +1719,17 @@ def main() -> None:
 
     render_sidebar_logo()
     user_name = sidebar_user()
-
     render_internal_header()
 
     with st.sidebar:
         st.header("Datos")
         uploaded = st.file_uploader("Sustituir matriz Excel en esta sesión", type=["xlsx"])
-        st.caption("En la versión web compartida se recomienda mantener una matriz base estable en la carpeta data/.")
+        st.caption("La matriz base se mantiene en data/. Para ir más rápido, la app solo carga cada bloque cuando se abre.")
 
     matrix = read_excel_bytes(uploaded.getvalue()) if uploaded is not None else load_default_matrix()
-    evaluations = get_evaluations(engine)
-    history = get_history(engine)
-    seed_contacts_if_empty(engine)
-    contacts = get_contacts(engine)
-    assignments = get_action_contacts(engine)
+    evaluations = clean_interface_dataframe(get_evaluations(engine))
     data = merge_matrix_evaluations(matrix, evaluations)
-    data = merge_assignments(data, assignments, contacts)
     data = clean_interface_dataframe(data)
-    contacts = clean_interface_dataframe(contacts)
-    assignments = clean_interface_dataframe(assignments)
-    history = clean_interface_dataframe(history)
     data["avance"] = data.get("avance", pd.Series([0] * len(data))).fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
     data["cumplimiento_indicadores"] = data["cumplimiento_indicadores"].fillna("Sin evaluar")
@@ -1695,29 +1746,42 @@ def main() -> None:
     filtered = filter_dataframe(data)
 
     if st.session_state.get("role") == "admin":
-        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"])
-        with tabs[0]:
-            render_dashboard(filtered)
-        with tabs[1]:
-            render_matrix(filtered, data, contacts, assignments, user_name, engine)
-        with tabs[2]:
-            render_action_detail(filtered, data, user_name, engine)
-        with tabs[3]:
-            render_contacts(contacts, assignments, data, user_name, engine)
-        with tabs[4]:
-            render_evolution(filtered, data, history)
-        with tabs[5]:
-            render_admin(data, history, engine)
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"]
     else:
-        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"])
-        with tabs[0]:
-            render_dashboard(filtered)
-        with tabs[1]:
-            render_matrix(filtered, data, contacts, assignments, user_name, engine)
-        with tabs[2]:
-            render_action_detail(filtered, data, user_name, engine)
-        with tabs[3]:
-            render_contacts(contacts, assignments, data, user_name, engine)
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
+
+    selected_page = render_navigation(available_pages)
+
+    if selected_page == "Panel general":
+        render_dashboard(filtered)
+
+    elif selected_page == "Matriz":
+        with st.spinner("Cargando asignaciones y contactos..."):
+            contacts, assignments = load_contacts_and_assignments(engine)
+            data_with_assignments = merge_assignments(data, assignments, contacts)
+            data_with_assignments = clean_interface_dataframe(data_with_assignments)
+            filtered_with_assignments = data_with_assignments[data_with_assignments["id_accion"].isin(filtered["id_accion"])].copy()
+        render_matrix(filtered_with_assignments, data_with_assignments, contacts, assignments, user_name, engine)
+
+    elif selected_page == "Ficha de evaluación":
+        render_action_detail(filtered, data, user_name, engine)
+
+    elif selected_page == "Red Local de Salud":
+        with st.spinner("Cargando Red Local de Salud..."):
+            contacts, assignments = load_contacts_and_assignments(engine)
+            data_with_assignments = merge_assignments(data, assignments, contacts)
+            data_with_assignments = clean_interface_dataframe(data_with_assignments)
+        render_contacts(contacts, assignments, data_with_assignments, user_name, engine)
+
+    elif selected_page == "Evolución" and st.session_state.get("role") == "admin":
+        with st.spinner("Cargando registro de evolución..."):
+            history = clean_interface_dataframe(get_history(engine))
+        render_evolution(filtered, data, history)
+
+    elif selected_page == "Administración" and st.session_state.get("role") == "admin":
+        with st.spinner("Cargando administración..."):
+            history = clean_interface_dataframe(get_history(engine))
+        render_admin(data, history, engine)
 
 
 if __name__ == "__main__":
