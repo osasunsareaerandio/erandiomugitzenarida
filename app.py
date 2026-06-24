@@ -1192,47 +1192,152 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     )
 
 def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataFrame) -> None:
-    st.subheader("Evolución temporal")
+    st.subheader("Registro de modificaciones")
+    st.caption("Tabla simplificada con quién modificó cada acción, cuándo lo hizo y qué campos cambió.")
+
     if history.empty:
-        st.info("Todavía no hay histórico. Cada vez que guardes una evaluación se añadirá una nueva medición con fecha.")
+        st.info("Todavía no hay modificaciones registradas. Cada vez que guardes una ficha de evaluación se añadirá una línea aquí.")
         return
-    history_meta = history.merge(all_data[["id_accion", "Ámbito", "Título", "Tipo", "Estado"]], on="id_accion", how="left")
+
+    meta_columns = ["id_accion", "Ámbito", "Título", "Tipo", "Estado"]
+    history_meta = history.merge(all_data[meta_columns], on="id_accion", how="left")
     history_meta = history_meta[history_meta["id_accion"].isin(set(df["id_accion"].astype(int)))].copy()
     if history_meta.empty:
-        st.info("No hay datos históricos para los filtros seleccionados.")
+        st.info("No hay modificaciones para los filtros seleccionados.")
         return
-    history_meta["fecha_grafico"] = history_meta["fecha_actualizacion_dt"].fillna(history_meta["updated_at_dt"])
-    history_meta = history_meta.dropna(subset=["fecha_grafico"])
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Mediciones históricas", len(history_meta))
-    col2.metric("Acciones con histórico", history_meta["id_accion"].nunique())
-    col3.metric("Completadas actualmente", int((df["estado_evaluacion"] == "Completado").sum()))
+    def parse_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "1", "sí", "si", "yes", "y"}
 
-    st.markdown("### Evolución global por estado de evaluación")
-    global_series = history_meta.groupby(["fecha_grafico", "estado_evaluacion"], as_index=False).size().rename(columns={"size": "acciones"})
-    fig = px.line(global_series, x="fecha_grafico", y="acciones", color="estado_evaluacion", markers=True, labels={"acciones": "Nº de mediciones", "fecha_grafico": "Fecha", "estado_evaluacion": "Estado"}, color_discrete_sequence=BRAND_COLORS)
-    st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+    def display_value(field: str, value: Any) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        if field in ["link_promotora_enviado", "link_participante_enviado"]:
+            return "Sí" if parse_bool(value) else "No"
+        text_value = str(value).strip()
+        if len(text_value) > 160:
+            return text_value[:157] + "..."
+        return text_value
 
-    st.markdown("### Estado de evaluación por ámbito")
-    scope_series = history_meta.groupby(["Ámbito", "estado_evaluacion"], as_index=False).size().rename(columns={"size": "acciones"})
-    fig = px.bar(scope_series, x="Ámbito", y="acciones", color="estado_evaluacion", barmode="group", labels={"acciones": "Nº de mediciones", "estado_evaluacion": "Estado"}, color_discrete_sequence=BRAND_COLORS)
-    st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+    tracked_fields = [
+        ("estado_evaluacion", "Estado de evaluación"),
+        ("cumplimiento_indicadores", "Cumplimiento de indicadores"),
+        ("valoracion_tecnica", "Valoración técnica"),
+        ("observaciones", "Observaciones"),
+        ("responsable_seguimiento", "Responsable seguimiento"),
+        ("fecha_actualizacion", "Fecha de evaluación"),
+        ("evidencias", "Evidencias / enlaces"),
+        ("riesgos", "Riesgos / bloqueos"),
+        ("proximos_pasos", "Próximos pasos"),
+        ("prioridad", "Prioridad"),
+        ("link_promotora", "Link Persona Promotora"),
+        ("link_promotora_enviado", "Check envío Persona Promotora"),
+        ("link_promotora_fecha", "Fecha envío Persona Promotora"),
+        ("link_participante", "Link Persona participante"),
+        ("link_participante_enviado", "Check envío Persona participante"),
+        ("link_participante_fecha", "Fecha envío Persona participante"),
+    ]
+    tracked_fields = [(field, label) for field, label in tracked_fields if field in history_meta.columns]
 
-    st.markdown("### Evolución de una acción concreta")
-    options = df.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
-    selected = st.selectbox("Selecciona una acción", options, key="history_action")
-    selected_id = int(selected.split(" - ")[0])
-    action_history = history_meta[history_meta["id_accion"] == selected_id].sort_values(["fecha_grafico", "updated_at_dt", "id"])
-    if action_history.empty:
-        st.info("Esta acción todavía no tiene mediciones históricas.")
-    else:
-        st.dataframe(action_history[["fecha_actualizacion", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by", "valoracion_tecnica", "observaciones", "riesgos", "proximos_pasos", "link_promotora", "link_promotora_enviado", "link_promotora_fecha", "link_participante", "link_participante_enviado", "link_participante_fecha", "updated_at"]], use_container_width=True, hide_index=True)
+    sort_cols = [c for c in ["id_accion", "updated_at_dt", "updated_at", "id"] if c in history_meta.columns]
+    history_meta = history_meta.sort_values(sort_cols).copy()
+
+    rows = []
+    for _, group in history_meta.groupby("id_accion", sort=False):
+        previous = None
+        for _, item in group.iterrows():
+            changed_labels = []
+            changed_details = []
+            if previous is None:
+                for field, label in tracked_fields:
+                    value = display_value(field, item.get(field))
+                    if value:
+                        changed_labels.append(label)
+                        changed_details.append(f"{label}: {value}")
+                if not changed_labels:
+                    changed_labels = ["Registro inicial"]
+                    changed_details = ["Registro inicial sin campos informados."]
+            else:
+                for field, label in tracked_fields:
+                    old_value = display_value(field, previous.get(field))
+                    new_value = display_value(field, item.get(field))
+                    if old_value != new_value:
+                        changed_labels.append(label)
+                        changed_details.append(f"{label}: {old_value or 'vacío'} → {new_value or 'vacío'}")
+                if not changed_labels:
+                    changed_labels = ["Guardado sin cambios visibles"]
+                    changed_details = ["Se guardó la ficha, pero no se detectaron cambios en los campos principales."]
+
+            updated_when = item.get("updated_at_dt")
+            if pd.isna(updated_when) if updated_when is not None else True:
+                updated_when = pd.to_datetime(item.get("updated_at"), errors="coerce")
+
+            rows.append({
+                "Cuándo": updated_when,
+                "Quién": safe_text(item.get("updated_by")) or "Sin identificar",
+                "Actividad": safe_text(item.get("Título")) or f"Acción {int(item.get('id_accion'))}",
+                "Ámbito": safe_text(item.get("Ámbito")),
+                "Qué ha modificado": "; ".join(changed_labels),
+                "Detalle del cambio": "\n".join(changed_details),
+            })
+            previous = item
+
+    changes = pd.DataFrame(rows)
+    if changes.empty:
+        st.info("No hay modificaciones para mostrar.")
+        return
+
+    changes = changes.sort_values("Cuándo", ascending=False).copy()
+    changes["Fecha"] = changes["Cuándo"].dt.strftime("%d/%m/%Y %H:%M").fillna("")
+
+    with st.expander("Filtros", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            users = sorted([u for u in changes["Quién"].dropna().unique().tolist() if safe_text(u)])
+            selected_users = st.multiselect("Quién", users, default=users)
+        with col2:
+            scopes = sorted([a for a in changes["Ámbito"].dropna().unique().tolist() if safe_text(a)])
+            selected_scopes = st.multiselect("Ámbito", scopes, default=scopes)
+        with col3:
+            text_filter = st.text_input("Buscar", placeholder="Actividad, campo o detalle...")
+
+    filtered_changes = changes.copy()
+    if selected_users:
+        filtered_changes = filtered_changes[filtered_changes["Quién"].isin(selected_users)]
+    if selected_scopes:
+        filtered_changes = filtered_changes[filtered_changes["Ámbito"].isin(selected_scopes)]
+    if text_filter:
+        haystack = filtered_changes[["Actividad", "Qué ha modificado", "Detalle del cambio", "Quién", "Ámbito"]].fillna("").agg(" ".join, axis=1).str.lower()
+        filtered_changes = filtered_changes[haystack.str.contains(text_filter.lower(), regex=False)]
+
+    st.metric("Modificaciones registradas", len(filtered_changes))
+    st.dataframe(
+        filtered_changes[["Quién", "Actividad", "Fecha", "Qué ha modificado", "Detalle del cambio"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Actividad": st.column_config.TextColumn("Qué actividad", width="large"),
+            "Detalle del cambio": st.column_config.TextColumn("Qué ha modificado", width="large"),
+            "Fecha": st.column_config.TextColumn("Cuándo", width="medium"),
+        },
+    )
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        history_meta.to_excel(writer, index=False, sheet_name="Historico")
-    st.download_button("Descargar histórico en Excel", buffer.getvalue(), "historico_evaluacion.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        filtered_changes[["Quién", "Actividad", "Ámbito", "Fecha", "Qué ha modificado", "Detalle del cambio"]].to_excel(writer, index=False, sheet_name="Registro cambios")
+    st.download_button(
+        "Descargar registro de modificaciones",
+        buffer.getvalue(),
+        "registro_modificaciones.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if df.empty:
