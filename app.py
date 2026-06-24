@@ -549,6 +549,33 @@ def seed_contacts_if_empty(engine: Engine) -> None:
             )
 
 
+def import_contacts_dataframe(engine: Engine, contacts_df: pd.DataFrame, user_name: str, replace: bool = False) -> int:
+    """Importa contactos desde un DataFrame normalizado. Si replace=True, sustituye el listado completo."""
+    if contacts_df.empty:
+        return 0
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        if replace:
+            conn.execute(text("DELETE FROM action_contacts"))
+            conn.execute(text("DELETE FROM contacts"))
+        inserted = 0
+        for _, row in contacts_df.iterrows():
+            payload = {col: safe_text(row.get(col)) for col in CONTACT_COLUMNS}
+            if not any(payload.values()):
+                continue
+            payload.update({"updated_by": user_name or "carga desde panel", "updated_at": now})
+            fields = list(payload.keys())
+            conn.execute(
+                text(f"""
+                    INSERT INTO contacts ({", ".join(fields)})
+                    VALUES ({", ".join([":" + f for f in fields])})
+                """),
+                payload,
+            )
+            inserted += 1
+    return inserted
+
+
 def get_contacts(engine: Engine) -> pd.DataFrame:
     with engine.begin() as conn:
         df = pd.read_sql_query(text("SELECT * FROM contacts ORDER BY contacto_id ASC"), conn)
@@ -842,8 +869,36 @@ def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFra
 
 def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Red Local de Salud")
+    st.caption("Listado compartido de personas y entidades de la Red Local de Salud. Puedes importar el Excel inicial, añadir personas y editar los campos directamente desde esta pestaña.")
+
+    with st.expander("Cargar o actualizar listado de contactos", expanded=contacts.empty):
+        st.write("Usa este bloque solo si el listado está vacío o necesitas incorporar contactos desde un Excel.")
+        c_load1, c_load2 = st.columns([1.2, 1])
+        with c_load1:
+            uploaded_contacts = st.file_uploader("Subir Excel de contactos", type=["xlsx"], key="contacts_excel_uploader")
+        with c_load2:
+            replace_contacts = st.checkbox("Sustituir listado completo", value=False, help="Si se activa, borra el listado actual y sus asignaciones antes de importar.")
+        if uploaded_contacts is not None:
+            try:
+                imported_df = read_contacts_bytes(uploaded_contacts.getvalue())
+                st.write(f"Contactos detectados en el Excel: {len(imported_df)}")
+                if st.button("Importar contactos desde Excel", key="import_uploaded_contacts"):
+                    if not user_name:
+                        st.error("Antes de importar, escribe tu nombre en la barra lateral.")
+                    else:
+                        inserted = import_contacts_dataframe(engine, imported_df, user_name, replace_contacts)
+                        st.success(f"Contactos importados: {inserted}")
+                        st.rerun()
+            except Exception as exc:
+                st.error(f"No se pudo leer el Excel de contactos: {exc}")
+        elif contacts.empty and CONTACTS_EXCEL.exists():
+            if st.button("Cargar Contactos.xlsx incluido en la app", key="import_packaged_contacts"):
+                inserted = import_contacts_dataframe(engine, load_default_contacts(), user_name or "carga inicial desde panel", replace=False)
+                st.success(f"Contactos cargados: {inserted}")
+                st.rerun()
+
     if contacts.empty:
-        st.info("Todavía no hay contactos. Puedes crear el primer registro desde el formulario inferior.")
+        st.info("Todavía no hay contactos cargados. Puedes importarlos desde el Excel o crear el primer registro desde el formulario inferior.")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Contactos", len(contacts))
