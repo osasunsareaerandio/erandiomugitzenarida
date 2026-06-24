@@ -1132,30 +1132,78 @@ def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_dashboard(df: pd.DataFrame) -> None:
+    chart_df = df.copy()
+
+    # Limpieza específica para gráficos: evita categorías técnicas como
+    # undefined/null/nan y no las convierte en leyenda visible.
+    chart_df["Ámbito"] = chart_df["Ámbito"].apply(safe_text)
+    chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].apply(safe_text)
+    chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].where(
+        chart_df["estado_evaluacion"].isin(STATUS_OPTIONS),
+        "Sin evaluar",
+    )
+
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Acciones filtradas", len(df))
-    col2.metric("Iniciadas", int((df["estado_evaluacion"] == "Iniciado").sum()))
-    col3.metric("Completadas", int((df["estado_evaluacion"] == "Completado").sum()))
-    col4.metric("Sin evaluar", int((df["estado_evaluacion"].fillna("Sin evaluar") == "Sin evaluar").sum()))
+    col1.metric("Acciones filtradas", len(chart_df))
+    col2.metric("Iniciadas", int((chart_df["estado_evaluacion"] == "Iniciado").sum()))
+    col3.metric("Completadas", int((chart_df["estado_evaluacion"] == "Completado").sum()))
+    col4.metric("Sin evaluar", int((chart_df["estado_evaluacion"] == "Sin evaluar").sum()))
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Acciones por ámbito")
-        chart_data = df.groupby("Ámbito", dropna=False).size().reset_index(name="acciones")
+        st.subheader("Acciones por ámbito y estado")
+        chart_data = (
+            chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
+            .groupby(["Ámbito", "estado_evaluacion"], dropna=False)
+            .size()
+            .reset_index(name="acciones")
+        )
         if not chart_data.empty:
-            fig = px.bar(chart_data, x="Ámbito", y="acciones", text="acciones", color_discrete_sequence=BRAND_COLORS)
+            fig = px.bar(
+                chart_data,
+                x="Ámbito",
+                y="acciones",
+                color="estado_evaluacion",
+                text="acciones",
+                barmode="stack",
+                category_orders={"estado_evaluacion": STATUS_OPTIONS},
+                color_discrete_sequence=BRAND_COLORS,
+                labels={
+                    "Ámbito": "Ámbito",
+                    "acciones": "Acciones",
+                    "estado_evaluacion": "Estado de evaluación",
+                },
+            )
+            fig.update_traces(textposition="inside")
             st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para mostrar este gráfico.")
     with right:
         st.subheader("Estado de evaluación")
-        chart_data = df.groupby("estado_evaluacion", dropna=False).size().reset_index(name="acciones")
+        chart_data = (
+            chart_df[chart_df["estado_evaluacion"].astype(str).str.strip() != ""]
+            .groupby("estado_evaluacion", dropna=False)
+            .size()
+            .reset_index(name="acciones")
+        )
+        chart_data = chart_data[chart_data["estado_evaluacion"].isin(STATUS_OPTIONS)]
         if not chart_data.empty:
-            fig = px.pie(chart_data, names="estado_evaluacion", values="acciones", color_discrete_sequence=BRAND_COLORS)
+            fig = px.pie(
+                chart_data,
+                names="estado_evaluacion",
+                values="acciones",
+                category_orders={"estado_evaluacion": STATUS_OPTIONS},
+                color_discrete_sequence=BRAND_COLORS,
+                labels={"estado_evaluacion": "Estado de evaluación", "acciones": "Acciones"},
+            )
             st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para mostrar este gráfico.")
 
     st.subheader("Acciones pendientes de completar")
     columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
-    pending = df[df["estado_evaluacion"].fillna("Sin evaluar").isin(["Sin evaluar", "Iniciado"])]
-    st.dataframe(pending.sort_values(["estado_evaluacion", "id_accion"])[columns].head(20), use_container_width=True, hide_index=True)
+    pending = chart_df[chart_df["estado_evaluacion"].isin(["Sin evaluar", "Iniciado"])]
+    st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_evaluacion", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
