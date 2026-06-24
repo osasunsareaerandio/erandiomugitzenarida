@@ -326,6 +326,12 @@ def get_secret(name: str, default: str = "") -> str:
 
 
 def safe_text(value: Any) -> str:
+    """Devuelve texto limpio para la interfaz.
+
+    Streamlit / pandas / JavaScript pueden devolver valores técnicos como
+    undefined, null o nan. En pantalla no deben mostrarse; se sustituyen por
+    vacío para mantener claridad visual.
+    """
     if value is None:
         return ""
     try:
@@ -333,7 +339,19 @@ def safe_text(value: Any) -> str:
             return ""
     except Exception:
         pass
-    return str(value).strip()
+    text_value = str(value).strip()
+    if text_value.lower() in {"undefined", "none", "null", "nan", "nat"}:
+        return ""
+    return text_value
+
+
+def clean_interface_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Limpia valores técnicos antes de mostrar tablas o exportarlas."""
+    cleaned = df.copy()
+    for col in cleaned.columns:
+        if cleaned[col].dtype == "object":
+            cleaned[col] = cleaned[col].apply(safe_text)
+    return cleaned
 
 
 def normalize_column_name(value: Any) -> str:
@@ -1031,9 +1049,9 @@ def sidebar_user() -> str:
         scope = st.session_state.get("scope", "")
         st.write(f"**Perfil:** {profile_name}")
         if role == "admin":
-            st.caption("Acceso de administración: todos los ejes y administración técnica.")
-        elif scope:
-            st.caption(f"Acceso limitado al eje: {scope}")
+            st.caption("Acceso de administración: todas las actividades, evolución y administración técnica.")
+        else:
+            st.caption("Perfil de eje: puede ver todas las actividades; las modificaciones quedan registradas con este perfil.")
         if st.button("Cerrar sesión"):
             st.session_state.clear()
             st.rerun()
@@ -1069,11 +1087,13 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
-    scope = st.session_state.get("scope")
-    role = st.session_state.get("role")
-    if role == "admin" or not scope or "Ámbito" not in data.columns:
-        return data
-    return data[data["Ámbito"].astype(str).str.strip() == str(scope).strip()].copy()
+    """Todos los perfiles ven todas las actividades.
+
+    Los perfiles ya no limitan por eje; solo identifican quién accede y quién
+    realiza cada modificación. Se mantiene la función para no tocar el flujo
+    principal de la aplicación.
+    """
+    return data.copy()
 
 
 def render_dashboard(df: pd.DataFrame) -> None:
@@ -1334,7 +1354,7 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
             pass
         if field in ["link_promotora_enviado", "link_participante_enviado"]:
             return "Sí" if parse_bool(value) else "No"
-        text_value = str(value).strip()
+        text_value = safe_text(value)
         if len(text_value) > 160:
             return text_value[:157] + "..."
         return text_value
@@ -1617,7 +1637,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
     if access_log.empty:
         st.info("Todavía no hay accesos registrados.")
     else:
-        st.dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50), use_container_width=True, hide_index=True)
+        st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
     buffer = io.BytesIO()
@@ -1655,6 +1675,10 @@ def main() -> None:
     assignments = get_action_contacts(engine)
     data = merge_matrix_evaluations(matrix, evaluations)
     data = merge_assignments(data, assignments, contacts)
+    data = clean_interface_dataframe(data)
+    contacts = clean_interface_dataframe(contacts)
+    assignments = clean_interface_dataframe(assignments)
+    history = clean_interface_dataframe(history)
     data["avance"] = data.get("avance", pd.Series([0] * len(data))).fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
     data["cumplimiento_indicadores"] = data["cumplimiento_indicadores"].fillna("Sin evaluar")
@@ -1685,7 +1709,7 @@ def main() -> None:
         with tabs[5]:
             render_admin(data, history, engine)
     else:
-        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución"])
+        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"])
         with tabs[0]:
             render_dashboard(filtered)
         with tabs[1]:
@@ -1694,8 +1718,6 @@ def main() -> None:
             render_action_detail(filtered, data, user_name, engine)
         with tabs[3]:
             render_contacts(contacts, assignments, data, user_name, engine)
-        with tabs[4]:
-            render_evolution(filtered, data, history)
 
 
 if __name__ == "__main__":
