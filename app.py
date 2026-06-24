@@ -525,19 +525,94 @@ def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int]
 
 
 
+def normalize_contact_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Normaliza columnas de contactos procedentes de PostgreSQL/SQLite.
+
+    En PostgreSQL los nombres no entrecomillados se devuelven en minúsculas
+    (por ejemplo, Categoria -> categoria, Teléfono -> teléfono). Esta función
+    los vuelve a poner con el nombre visible que usa la aplicación.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"])
+
+    def key(value: Any) -> str:
+        text_value = str(value).strip().lower()
+        return (
+            text_value
+            .replace("á", "a")
+            .replace("é", "e")
+            .replace("í", "i")
+            .replace("ó", "o")
+            .replace("ú", "u")
+            .replace("ü", "u")
+            .replace("ñ", "n")
+        )
+
+    aliases = {
+        "contacto_id": "contacto_id",
+        "id": "contacto_id",
+        "categoria": "Categoria",
+        "subcategoria": "Subcategoria",
+        "comision": "Comisión",
+        "perfil": "Perfil",
+        "entidad": "Entidad",
+        "telefono": "Teléfono",
+        "persona": "Persona",
+        "mail": "Mail",
+        "email": "Mail",
+        "correo": "Mail",
+        "updated_by": "updated_by",
+        "updated_at": "updated_at",
+    }
+
+    renamed = {}
+    for col in df.columns:
+        mapped = aliases.get(key(col))
+        if mapped and mapped not in renamed.values():
+            renamed[col] = mapped
+    df = df.rename(columns=renamed).copy()
+
+    for col in ["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at"]:
+        if col not in df.columns:
+            df[col] = "" if col != "contacto_id" else range(1, len(df) + 1)
+
+    try:
+        df["contacto_id"] = pd.to_numeric(df["contacto_id"], errors="coerce").fillna(0).astype(int)
+    except Exception:
+        df["contacto_id"] = range(1, len(df) + 1)
+
+    for col in CONTACT_COLUMNS:
+        df[col] = df[col].apply(safe_text)
+    df["updated_by"] = df["updated_by"].apply(safe_text)
+    df["updated_at"] = df["updated_at"].apply(safe_text)
+    df["contacto_label"] = df.apply(make_contact_label, axis=1)
+    return df[["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"]]
+
+
 def seed_contacts_if_empty(engine: Engine) -> None:
-    """Carga Contactos.xlsx en la base de datos una sola vez si la tabla contacts está vacía."""
-    with engine.begin() as conn:
-        count = conn.execute(text("SELECT COUNT(*) FROM contacts")).scalar() or 0
-    if count > 0 or not CONTACTS_EXCEL.exists():
+    """Carga Contactos.xlsx si la tabla está vacía o solo contiene registros sin datos visibles."""
+    if not CONTACTS_EXCEL.exists():
+        return
+    try:
+        current = get_contacts(engine)
+        meaningful_rows = current[CONTACT_COLUMNS].fillna("").astype(str).apply(
+            lambda row: any(cell.strip() for cell in row), axis=1
+        ).sum() if not current.empty else 0
+    except Exception:
+        meaningful_rows = 0
+    if meaningful_rows > 0:
         return
     seed = load_default_contacts()
     if seed.empty:
         return
     now = datetime.now().isoformat(timespec="seconds")
     with engine.begin() as conn:
+        conn.execute(text("DELETE FROM action_contacts"))
+        conn.execute(text("DELETE FROM contacts"))
         for _, row in seed.iterrows():
             payload = {col: safe_text(row.get(col)) for col in CONTACT_COLUMNS}
+            if not any(payload.values()):
+                continue
             payload.update({"updated_by": "carga inicial", "updated_at": now})
             fields = list(payload.keys())
             conn.execute(
@@ -578,16 +653,8 @@ def import_contacts_dataframe(engine: Engine, contacts_df: pd.DataFrame, user_na
 
 def get_contacts(engine: Engine) -> pd.DataFrame:
     with engine.begin() as conn:
-        df = pd.read_sql_query(text("SELECT * FROM contacts ORDER BY contacto_id ASC"), conn)
-    if df.empty:
-        return pd.DataFrame(columns=["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"])
-    df["contacto_id"] = df["contacto_id"].astype(int)
-    for col in CONTACT_COLUMNS:
-        if col not in df.columns:
-            df[col] = ""
-        df[col] = df[col].apply(safe_text)
-    df["contacto_label"] = df.apply(make_contact_label, axis=1)
-    return df[["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"]]
+        raw = pd.read_sql_query(text("SELECT * FROM contacts ORDER BY contacto_id ASC"), conn)
+    return normalize_contact_dataframe(raw)
 
 
 def add_contact(engine: Engine, data: dict[str, Any], user_name: str) -> None:
