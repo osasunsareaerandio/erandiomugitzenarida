@@ -15,6 +15,9 @@ from sqlalchemy.engine import Engine
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
+ASSETS_DIR = APP_DIR / "assets"
+LOGO_PATH = ASSETS_DIR / "logo.png"
+HOME_IMAGE_PATH = ASSETS_DIR / "inicio.png"
 DEFAULT_EXCEL = DATA_DIR / "Matriz Acciones Fase II.xlsx"
 CONTACTS_EXCEL = DATA_DIR / "Contactos.xlsx"
 DEFAULT_SHEET = "MATRIZ Evaluación"
@@ -34,6 +37,218 @@ STATUS_OPTIONS = [
 ]
 INDICATOR_OPTIONS = ["Sin evaluar", "No iniciado", "Parcial", "Cumplido", "Sobrecumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
+
+# Paleta corporativa Erandio Mugitzen ari da!
+COLOR_NAVY = "#1C3054"
+COLOR_SKY = "#32A4CF"
+COLOR_CORAL = "#E95C47"
+COLOR_MAUVE = "#AE7CAA"
+COLOR_GOLD = "#F9C14F"
+BRAND_COLORS = [COLOR_NAVY, COLOR_SKY, COLOR_CORAL, COLOR_MAUVE, COLOR_GOLD]
+
+
+def apply_brand_theme() -> None:
+    """Aplica una interfaz clara: blanco dominante y paleta corporativa como acento."""
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --brand-navy: {COLOR_NAVY};
+            --brand-sky: {COLOR_SKY};
+            --brand-coral: {COLOR_CORAL};
+            --brand-mauve: {COLOR_MAUVE};
+            --brand-gold: {COLOR_GOLD};
+            --brand-white: #ffffff;
+            --brand-soft: #f7f9fc;
+            --brand-line: rgba(28, 48, 84, 0.14);
+        }}
+
+        /* Base: el blanco manda; la paleta se usa como acento. */
+        .stApp {{
+            background: var(--brand-white);
+            color: var(--brand-navy);
+        }}
+
+        .main .block-container {{
+            padding-top: 1.35rem;
+            padding-bottom: 2.5rem;
+            max-width: 1280px;
+        }}
+
+        h1, h2, h3, h4, h5, h6, .stMarkdown, label, p, span {{
+            color: var(--brand-navy);
+        }}
+
+        h1 {{
+            font-weight: 750;
+            letter-spacing: -0.02em;
+        }}
+
+        h2, h3 {{
+            font-weight: 700;
+        }}
+
+        /* Cabecera interna: clara, blanca y con acento inferior. */
+        .brand-header {{
+            background: var(--brand-white);
+            border: 1px solid var(--brand-line);
+            border-bottom: 5px solid var(--brand-sky);
+            border-radius: 1rem;
+            padding: 0.85rem 1.05rem;
+            margin-bottom: 1.1rem;
+            box-shadow: 0 1px 8px rgba(28, 48, 84, 0.05);
+        }}
+
+        .brand-header [data-testid="stImage"] img {{
+            object-fit: contain;
+        }}
+
+        /* Sidebar: blanco, limpio y con una banda sutil de marca. */
+        section[data-testid="stSidebar"] {{
+            background: var(--brand-white);
+            border-right: 1px solid var(--brand-line);
+        }}
+
+        section[data-testid="stSidebar"] > div:first-child {{
+            padding-top: 1rem;
+        }}
+
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p {{
+            color: var(--brand-navy);
+        }}
+
+        section[data-testid="stSidebar"] [data-testid="stImage"] {{
+            background: var(--brand-white);
+            border-bottom: 4px solid var(--brand-gold);
+            padding: 0.25rem 0 0.9rem 0;
+            margin-bottom: 0.8rem;
+        }}
+
+        /* Contenedores y expanders. */
+        div[data-testid="stExpander"] {{
+            background: var(--brand-white);
+            border: 1px solid var(--brand-line);
+            border-radius: 0.9rem;
+        }}
+
+        /* Botones: principal en azul marino; hover celeste. */
+        .stButton > button,
+        .stDownloadButton > button,
+        button[kind="primary"] {{
+            background-color: var(--brand-navy) !important;
+            color: var(--brand-white) !important;
+            border: 1px solid var(--brand-navy) !important;
+            border-radius: 0.55rem !important;
+            font-weight: 650 !important;
+        }}
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover {{
+            background-color: var(--brand-sky) !important;
+            border-color: var(--brand-sky) !important;
+            color: var(--brand-white) !important;
+        }}
+
+        /* Inputs: blancos, bordes suaves y foco celeste. */
+        input, textarea, [data-baseweb="select"] > div {{
+            background-color: var(--brand-white) !important;
+            color: var(--brand-navy) !important;
+            border-color: var(--brand-line) !important;
+        }}
+
+        input:focus, textarea:focus, [data-baseweb="select"]:focus-within {{
+            border-color: var(--brand-sky) !important;
+            box-shadow: 0 0 0 1px var(--brand-sky) !important;
+        }}
+
+        /* Tabs: blanco dominante y marcador coral. */
+        div[data-baseweb="tab-list"] {{
+            gap: 0.25rem;
+            border-bottom: 1px solid var(--brand-line);
+        }}
+
+        button[data-baseweb="tab"] {{
+            color: var(--brand-navy) !important;
+            font-weight: 650;
+            background: var(--brand-white) !important;
+            border-radius: 0.55rem 0.55rem 0 0;
+        }}
+
+        button[data-baseweb="tab"][aria-selected="true"] {{
+            color: var(--brand-coral) !important;
+            border-bottom: 4px solid var(--brand-coral) !important;
+            background: rgba(233, 92, 71, 0.05) !important;
+        }}
+
+        /* Métricas: tarjetas blancas, acento dorado. */
+        div[data-testid="stMetric"] {{
+            background: var(--brand-white);
+            border: 1px solid var(--brand-line);
+            border-left: 6px solid var(--brand-gold);
+            border-radius: 0.8rem;
+            padding: 0.8rem 1rem;
+            box-shadow: 0 1px 8px rgba(28, 48, 84, 0.04);
+        }}
+
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {{
+            color: var(--brand-navy) !important;
+        }}
+
+        /* Avisos: suaves, sin saturar la interfaz. */
+        div[data-testid="stAlert"] {{
+            border-radius: 0.75rem;
+            border: 1px solid var(--brand-line);
+        }}
+
+        /* Enlaces. */
+        a {{
+            color: var(--brand-sky) !important;
+            text-decoration: none;
+            font-weight: 600;
+        }}
+
+        a:hover {{
+            color: var(--brand-coral) !important;
+            text-decoration: underline;
+        }}
+
+        /* Dataframes: blancos y legibles. */
+        div[data-testid="stDataFrame"] {{
+            border: 1px solid var(--brand-line);
+            border-radius: 0.75rem;
+            background: var(--brand-white);
+            box-shadow: 0 1px 8px rgba(28, 48, 84, 0.035);
+        }}
+
+        /* Separadores visuales discretos. */
+        hr {{
+            border-color: var(--brand-line);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def apply_plotly_brand_layout(fig):
+    """Normaliza colores y estilo de gráficos Plotly con la paleta corporativa."""
+    fig.update_layout(
+        colorway=BRAND_COLORS,
+        font=dict(color=COLOR_NAVY),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        title_font=dict(color=COLOR_NAVY),
+        legend_title_font_color=COLOR_NAVY,
+        legend_font_color=COLOR_NAVY,
+        margin=dict(l=20, r=20, t=40, b=20),
+    )
+    fig.update_xaxes(color=COLOR_NAVY, gridcolor="rgba(28,48,84,0.12)")
+    fig.update_yaxes(color=COLOR_NAVY, gridcolor="rgba(28,48,84,0.12)")
+    return fig
 
 
 def get_secret(name: str, default: str = "") -> str:
@@ -329,6 +544,45 @@ def merge_matrix_evaluations(matrix: pd.DataFrame, evaluations: pd.DataFrame) ->
     return matrix.merge(evaluations, on="id_accion", how="left")
 
 
+
+def render_home_image() -> None:
+    """Imagen de portada en la pantalla de acceso."""
+    if HOME_IMAGE_PATH.exists():
+        left, center, right = st.columns([1, 3, 1])
+        with center:
+            st.image(str(HOME_IMAGE_PATH), use_container_width=True)
+
+
+def render_login_title() -> None:
+    render_home_image()
+    st.markdown('<div class="brand-header">', unsafe_allow_html=True)
+    st.title(get_secret("APP_TITLE", "Erandio Mugitzen ari da! - Evaluación y seguimiento"))
+    st.caption("Acceso restringido a la herramienta compartida de evaluación y seguimiento")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_internal_header() -> None:
+    """Cabecera interna con logo proporcionado y título."""
+    st.markdown('<div class="brand-header">', unsafe_allow_html=True)
+    if LOGO_PATH.exists():
+        col_logo, col_title = st.columns([1, 7], vertical_alignment="center")
+        with col_logo:
+            st.image(str(LOGO_PATH), width=96)
+        with col_title:
+            st.title(get_secret("APP_TITLE", "Evaluacion y seguimiento Emad!"))
+            st.caption("Herramienta compartida de evaluación, seguimiento histórico y actualización de acciones")
+    else:
+        st.title(get_secret("APP_TITLE", "Evaluacion y seguimiento Emad!"))
+        st.caption("Herramienta compartida de evaluación, seguimiento histórico y actualización de acciones")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def render_sidebar_logo() -> None:
+    """Logo en la parte superior izquierda, integrado con el menú lateral."""
+    if LOGO_PATH.exists():
+        st.sidebar.image(str(LOGO_PATH), width=145)
+
+
 def authenticate() -> bool:
     app_password = get_secret("APP_PASSWORD", "").strip()
     if not app_password:
@@ -336,8 +590,7 @@ def authenticate() -> bool:
         return True
     if st.session_state.get("authenticated"):
         return True
-    st.title(get_secret("APP_TITLE", "Evaluacion y seguimiento Emad!"))
-    st.caption("Acceso restringido")
+    render_login_title()
     password = st.text_input("Clave de acceso", type="password")
     if st.button("Entrar"):
         if password == app_password:
@@ -399,12 +652,14 @@ def render_dashboard(df: pd.DataFrame) -> None:
         st.subheader("Acciones por ámbito")
         chart_data = df.groupby("Ámbito", dropna=False).size().reset_index(name="acciones")
         if not chart_data.empty:
-            st.plotly_chart(px.bar(chart_data, x="Ámbito", y="acciones", text="acciones"), use_container_width=True)
+            fig = px.bar(chart_data, x="Ámbito", y="acciones", text="acciones", color_discrete_sequence=BRAND_COLORS)
+            st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
     with right:
         st.subheader("Estado de evaluación")
         chart_data = df.groupby("estado_evaluacion", dropna=False).size().reset_index(name="acciones")
         if not chart_data.empty:
-            st.plotly_chart(px.pie(chart_data, names="estado_evaluacion", values="acciones"), use_container_width=True)
+            fig = px.pie(chart_data, names="estado_evaluacion", values="acciones", color_discrete_sequence=BRAND_COLORS)
+            st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
     st.subheader("Acciones con menor avance")
     columns = ["id_accion", "Ámbito", "Título", "Estado", "avance", "estado_evaluacion", "responsable_seguimiento", "updated_by"]
@@ -532,11 +787,13 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
 
     st.markdown("### Evolución global del avance medio")
     global_series = history_meta.sort_values(["fecha_grafico", "updated_at_dt", "id"]).groupby("fecha_grafico", as_index=False)["avance"].mean()
-    st.plotly_chart(px.line(global_series, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}), use_container_width=True)
+    fig = px.line(global_series, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=BRAND_COLORS)
+    st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
     st.markdown("### Evolución media por ámbito")
     scope_series = history_meta.sort_values(["fecha_grafico", "updated_at_dt", "id"]).groupby(["fecha_grafico", "Ámbito"], as_index=False)["avance"].mean()
-    st.plotly_chart(px.line(scope_series, x="fecha_grafico", y="avance", color="Ámbito", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}), use_container_width=True)
+    fig = px.line(scope_series, x="fecha_grafico", y="avance", color="Ámbito", markers=True, labels={"avance": "Avance medio (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=BRAND_COLORS)
+    st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
 
     st.markdown("### Evolución de una acción concreta")
     options = df.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
@@ -546,7 +803,8 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
     if action_history.empty:
         st.info("Esta acción todavía no tiene mediciones históricas.")
     else:
-        st.plotly_chart(px.line(action_history, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance (%)", "fecha_grafico": "Fecha"}), use_container_width=True)
+        fig = px.line(action_history, x="fecha_grafico", y="avance", markers=True, labels={"avance": "Avance (%)", "fecha_grafico": "Fecha"}, color_discrete_sequence=[COLOR_CORAL])
+        st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
         st.dataframe(action_history[["fecha_actualizacion", "avance", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by", "valoracion_tecnica", "observaciones", "riesgos", "proximos_pasos", "updated_at"]], use_container_width=True, hide_index=True)
 
     buffer = io.BytesIO()
@@ -648,16 +906,18 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
 
 
 def main() -> None:
-    st.set_page_config(page_title="Evaluacion y seguimiento", layout="wide")
+    page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
+    st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
+    apply_brand_theme()
     if not authenticate():
         return
 
     engine = get_engine()
     init_db(engine)
+    render_sidebar_logo()
     user_name = sidebar_user()
 
-    st.title(get_secret("APP_TITLE", "Evaluacion y seguimiento Emad!"))
-    st.caption("Herramienta compartida de evaluación, seguimiento histórico y actualización de acciones")
+    render_internal_header()
 
     with st.sidebar:
         st.header("Datos")
