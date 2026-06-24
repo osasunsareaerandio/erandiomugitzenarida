@@ -45,6 +45,47 @@ COLOR_MAUVE = "#AE7CAA"
 COLOR_GOLD = "#F9C14F"
 BRAND_COLORS = [COLOR_NAVY, COLOR_SKY, COLOR_CORAL, COLOR_MAUVE, COLOR_GOLD]
 
+# Perfiles de acceso. Las claves reales se pueden cambiar desde Streamlit Secrets.
+# ADMIN_PASSWORD mantiene la clave de administración solicitada.
+PROFILE_CONFIG = {
+    "Administradora": {
+        "secret": "ADMIN_PASSWORD",
+        "default_password": "Temporal001*2026",
+        "role": "admin",
+        "scope": None,
+    },
+    "Alimentación": {
+        "secret": "PASSWORD_ALIMENTACION",
+        "default_password": "Alimentacion2026!",
+        "role": "eje",
+        "scope": "Alimentación",
+    },
+    "Deporte": {
+        "secret": "PASSWORD_DEPORTE",
+        "default_password": "Deporte2026!",
+        "role": "eje",
+        "scope": "Deporte",
+    },
+    "Educación": {
+        "secret": "PASSWORD_EDUCACION",
+        "default_password": "Educacion2026!",
+        "role": "eje",
+        "scope": "Educación",
+    },
+    "Ocio y tiempo libre": {
+        "secret": "PASSWORD_OCIO",
+        "default_password": "Ocio2026!",
+        "role": "eje",
+        "scope": "Ocio y tiempo libre",
+    },
+    "Bienestar emocional": {
+        "secret": "PASSWORD_BIENESTAR",
+        "default_password": "Bienestar2026!",
+        "role": "eje",
+        "scope": "Bienestar emocional",
+    },
+}
+
 
 def apply_brand_theme() -> None:
     """Aplica una interfaz clara: blanco dominante y paleta corporativa como acento."""
@@ -492,6 +533,18 @@ def init_db(engine: Engine) -> None:
             )
             """
         ))
+        access_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS access_log (
+                id {access_id_type},
+                perfil TEXT NOT NULL,
+                role TEXT NOT NULL,
+                scope TEXT,
+                logged_at TEXT NOT NULL
+            )
+            """
+        ))
     evaluation_extra_columns = {
         "updated_by": "TEXT",
         "link_promotora": "TEXT",
@@ -906,33 +959,85 @@ def render_sidebar_logo() -> None:
         st.sidebar.image(str(LOGO_PATH), width=145)
 
 
-def authenticate() -> bool:
-    app_password = get_secret("APP_PASSWORD", "").strip()
-    if not app_password:
-        st.warning("No hay clave de acceso configurada. Para publicar la app, define APP_PASSWORD en Secrets.")
-        return True
+def log_access(engine: Engine, perfil: str, role: str, scope: str | None) -> None:
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                INSERT INTO access_log (perfil, role, scope, logged_at)
+                VALUES (:perfil, :role, :scope, :logged_at)
+                """),
+                {
+                    "perfil": perfil,
+                    "role": role,
+                    "scope": scope or "",
+                    "logged_at": datetime.now().isoformat(timespec="seconds"),
+                },
+            )
+    except Exception:
+        # El acceso no debe bloquearse si falla el registro técnico.
+        pass
+
+
+def get_access_log(engine: Engine) -> pd.DataFrame:
+    try:
+        with engine.begin() as conn:
+            return pd.read_sql_query(text("SELECT * FROM access_log ORDER BY logged_at DESC"), conn)
+    except Exception:
+        return pd.DataFrame(columns=["id", "perfil", "role", "scope", "logged_at"])
+
+
+def get_profile_password(profile_name: str, config: dict[str, Any]) -> str:
+    # Para administración se mantiene Temporal001*2026 por defecto.
+    # Si existe APP_PASSWORD en Secrets, también se acepta como compatibilidad con la versión anterior.
+    password = get_secret(config["secret"], config["default_password"]).strip()
+    if config.get("role") == "admin":
+        return password or get_secret("APP_PASSWORD", "Temporal001*2026").strip()
+    return password
+
+
+def authenticate(engine: Engine) -> bool:
     if st.session_state.get("authenticated"):
         return True
     render_login_title()
-    password = st.text_input("Clave de acceso", type="password")
+    st.markdown("### Selecciona perfil de acceso")
+    profile_name = st.selectbox("Perfil", list(PROFILE_CONFIG.keys()))
+    password = st.text_input("Contraseña", type="password")
     if st.button("Entrar"):
-        if password == app_password:
+        config = PROFILE_CONFIG[profile_name]
+        expected_password = get_profile_password(profile_name, config)
+        admin_legacy_password = get_secret("APP_PASSWORD", "").strip() if config.get("role") == "admin" else ""
+        valid_passwords = {expected_password}
+        if admin_legacy_password:
+            valid_passwords.add(admin_legacy_password)
+        if password in valid_passwords:
             st.session_state["authenticated"] = True
+            st.session_state["profile_name"] = profile_name
+            st.session_state["role"] = config["role"]
+            st.session_state["scope"] = config.get("scope")
+            st.session_state["user_name"] = profile_name
+            log_access(engine, profile_name, config["role"], config.get("scope"))
             st.rerun()
         else:
-            st.error("Clave incorrecta.")
+            st.error("Contraseña incorrecta para este perfil.")
     return False
 
 
 def sidebar_user() -> str:
     with st.sidebar:
         st.header("Sesión")
-        user_name = st.text_input("Nombre de quien actualiza", value=st.session_state.get("user_name", ""))
-        st.session_state["user_name"] = user_name
+        profile_name = st.session_state.get("profile_name", "Sin perfil")
+        role = st.session_state.get("role", "")
+        scope = st.session_state.get("scope", "")
+        st.write(f"**Perfil:** {profile_name}")
+        if role == "admin":
+            st.caption("Acceso de administración: todos los ejes y administración técnica.")
+        elif scope:
+            st.caption(f"Acceso limitado al eje: {scope}")
         if st.button("Cerrar sesión"):
             st.session_state.clear()
             st.rerun()
-    return user_name.strip()
+    return str(st.session_state.get("user_name", profile_name)).strip()
 
 
 def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -961,6 +1066,14 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         haystack = filtered[["Título", "Descripción", "Indicadores", "Medida"]].fillna("").agg(" ".join, axis=1).str.lower()
         filtered = filtered[haystack.str.contains(texto.lower(), regex=False)]
     return filtered
+
+
+def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
+    scope = st.session_state.get("scope")
+    role = st.session_state.get("role")
+    if role == "admin" or not scope or "Ámbito" not in data.columns:
+        return data
+    return data[data["Ámbito"].astype(str).str.strip() == str(scope).strip()].copy()
 
 
 def render_dashboard(df: pd.DataFrame) -> None:
@@ -1498,12 +1611,20 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
     st.write("Estado de conexión:", "PostgreSQL/Supabase" if is_postgres(engine) else "SQLite local")
     st.write("Acciones cargadas:", len(data))
     st.write("Mediciones históricas:", len(history))
-    st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud.")
+    st.write("Perfiles activos:", ", ".join(PROFILE_CONFIG.keys()))
+    access_log = get_access_log(engine)
+    st.markdown("### Últimos accesos")
+    if access_log.empty:
+        st.info("Todavía no hay accesos registrados.")
+    else:
+        st.dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50), use_container_width=True, hide_index=True)
+    st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         data.to_excel(writer, index=False, sheet_name="Estado actual")
         history.to_excel(writer, index=False, sheet_name="Historico")
+        get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -1511,11 +1632,11 @@ def main() -> None:
     page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
     st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
     apply_brand_theme()
-    if not authenticate():
-        return
-
     engine = get_engine()
     init_db(engine)
+    if not authenticate(engine):
+        return
+
     render_sidebar_logo()
     user_name = sidebar_user()
 
@@ -1546,20 +1667,35 @@ def main() -> None:
             data[optional_col] = default_value
         data[optional_col] = data[optional_col].fillna(default_value)
 
+    data = apply_profile_scope(data)
     filtered = filter_dataframe(data)
-    tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"])
-    with tabs[0]:
-        render_dashboard(filtered)
-    with tabs[1]:
-        render_matrix(filtered, data, contacts, assignments, user_name, engine)
-    with tabs[2]:
-        render_action_detail(filtered, data, user_name, engine)
-    with tabs[3]:
-        render_contacts(contacts, assignments, data, user_name, engine)
-    with tabs[4]:
-        render_evolution(filtered, data, history)
-    with tabs[5]:
-        render_admin(data, history, engine)
+
+    if st.session_state.get("role") == "admin":
+        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"])
+        with tabs[0]:
+            render_dashboard(filtered)
+        with tabs[1]:
+            render_matrix(filtered, data, contacts, assignments, user_name, engine)
+        with tabs[2]:
+            render_action_detail(filtered, data, user_name, engine)
+        with tabs[3]:
+            render_contacts(contacts, assignments, data, user_name, engine)
+        with tabs[4]:
+            render_evolution(filtered, data, history)
+        with tabs[5]:
+            render_admin(data, history, engine)
+    else:
+        tabs = st.tabs(["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución"])
+        with tabs[0]:
+            render_dashboard(filtered)
+        with tabs[1]:
+            render_matrix(filtered, data, contacts, assignments, user_name, engine)
+        with tabs[2]:
+            render_action_detail(filtered, data, user_name, engine)
+        with tabs[3]:
+            render_contacts(contacts, assignments, data, user_name, engine)
+        with tabs[4]:
+            render_evolution(filtered, data, history)
 
 
 if __name__ == "__main__":
