@@ -1839,14 +1839,24 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
 
         st.markdown("### Links de evaluación")
-        st.caption("La aplicación genera enlaces propios de cuestionario. Si configuras APP_BASE_URL en Secrets, el enlace aparecerá completo; si no, aparece como ruta relativa.")
+        st.caption("La aplicación genera enlaces propios de cuestionario. Usa los botones para abrirlos y el desplegable para copiar el enlace cuando tengas que enviarlo.")
         generated_promotora = build_questionnaire_link(selected_id, "promotora")
         generated_participante = build_questionnaire_link(selected_id, "participante")
-        st.code(f"Persona Promotora: {generated_promotora}")
-        st.code(f"Persona participante: {generated_participante}")
+        current_link_promotora = safe_text(row.get("link_promotora")) or generated_promotora
+        current_link_participante = safe_text(row.get("link_participante")) or generated_participante
+
         l1, l2 = st.columns(2)
         with l1:
-            link_promotora = st.text_input("Persona Promotora - link", value=safe_text(row.get("link_promotora")) or generated_promotora, placeholder="Pega aquí el link para la entidad o persona promotora")
+            render_questionnaire_link_card(
+                "Persona Promotora",
+                current_link_promotora,
+                "Formulario para la entidad o persona que promueve o coordina la actividad.",
+            )
+            link_promotora = st.text_input(
+                "Enlace guardado - Persona Promotora",
+                value=current_link_promotora,
+                help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
+            )
             link_promotora_enviado = st.checkbox("Enviado a Persona Promotora", value=bool(row.get("link_promotora_enviado") or False))
             promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
             try:
@@ -1855,7 +1865,16 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 promotora_date = date.today()
             link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
         with l2:
-            link_participante = st.text_input("Persona participante - link", value=safe_text(row.get("link_participante")) or generated_participante, placeholder="Pega aquí el link para la persona participante")
+            render_questionnaire_link_card(
+                "Persona participante",
+                current_link_participante,
+                "Formulario para las personas que han participado o se han apuntado a la actividad.",
+            )
+            link_participante = st.text_input(
+                "Enlace guardado - Persona participante",
+                value=current_link_participante,
+                help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
+            )
             link_participante_enviado = st.checkbox("Enviado a Persona participante", value=bool(row.get("link_participante_enviado") or False))
             participante_fecha_value = safe_text(row.get("link_participante_fecha"))
             try:
