@@ -4,7 +4,9 @@ import base64
 import io
 import os
 import re
+import smtplib
 from datetime import date, datetime
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,7 @@ CONTACT_COLUMNS = [
 STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
 INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
+TASK_STATUS_OPTIONS = ["No iniciado", "En curso", "Completado", "Descartado"]
 QUESTIONNAIRE_TYPES = {"promotora": "Persona Promotora", "participante": "Persona participante"}
 LIKERT_OPTIONS = [1, 2, 3, 4, 5]
 LIKERT_SELECT_OPTIONS = ["Sin marcar", 1, 2, 3, 4, 5]
@@ -586,6 +589,56 @@ def init_db(_engine: Engine) -> None:
                 role TEXT NOT NULL,
                 scope TEXT,
                 logged_at TEXT NOT NULL
+            )
+            """
+        ))
+        task_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS manual_tasks (
+                task_id {task_id_type},
+                id_accion INTEGER,
+                accion_titulo TEXT,
+                proximos_pasos TEXT,
+                descripcion TEXT,
+                responsable_seguimiento TEXT,
+                fecha_peticion TEXT,
+                fecha_vencimiento TEXT,
+                estado TEXT NOT NULL DEFAULT 'No iniciado',
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS task_overrides (
+                task_key TEXT PRIMARY KEY,
+                descripcion TEXT,
+                fecha_vencimiento TEXT,
+                estado TEXT NOT NULL DEFAULT 'No iniciado',
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS task_email_reminders (
+                reminder_key TEXT PRIMARY KEY,
+                task_source TEXT NOT NULL,
+                task_identifier TEXT NOT NULL,
+                id_accion INTEGER,
+                accion_titulo TEXT,
+                proximos_pasos TEXT,
+                responsable_seguimiento TEXT,
+                fecha_vencimiento TEXT,
+                recipient TEXT NOT NULL,
+                sent_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'sent',
+                error_message TEXT
             )
             """
         ))
@@ -1369,6 +1422,607 @@ def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
     return data.copy()
 
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_manual_tasks(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM manual_tasks ORDER BY updated_at DESC, task_id DESC"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "task_id", "id_accion", "accion_titulo", "proximos_pasos", "descripcion", "responsable_seguimiento",
+            "fecha_peticion", "fecha_vencimiento", "estado", "created_by", "created_at", "updated_by", "updated_at",
+        ])
+    df["task_id"] = df["task_id"].astype(int)
+    df["id_accion"] = pd.to_numeric(df.get("id_accion"), errors="coerce")
+    return clean_interface_dataframe(df)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_task_overrides(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM task_overrides"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=["task_key", "descripcion", "fecha_vencimiento", "estado", "updated_by", "updated_at"])
+    return clean_interface_dataframe(df)
+
+
+def save_task_overrides(engine: Engine, tasks_df: pd.DataFrame, user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    if tasks_df.empty:
+        return
+    with engine.begin() as conn:
+        for _, row in tasks_df.iterrows():
+            task_key = safe_text(row.get("task_key"))
+            if not task_key:
+                continue
+            payload = {
+                "task_key": task_key,
+                "descripcion": safe_text(row.get("Descripción")),
+                "fecha_vencimiento": safe_text(row.get("Fecha de vencimiento")),
+                "estado": safe_text(row.get("Estado")) or "No iniciado",
+                "updated_by": user_name,
+                "updated_at": now,
+            }
+            if is_postgres(engine):
+                conn.execute(text("""
+                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, updated_by, updated_at)
+                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :updated_by, :updated_at)
+                    ON CONFLICT(task_key) DO UPDATE SET
+                        descripcion = excluded.descripcion,
+                        fecha_vencimiento = excluded.fecha_vencimiento,
+                        estado = excluded.estado,
+                        updated_by = excluded.updated_by,
+                        updated_at = excluded.updated_at
+                """), payload)
+            else:
+                conn.execute(text("""
+                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, updated_by, updated_at)
+                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :updated_by, :updated_at)
+                    ON CONFLICT(task_key) DO UPDATE SET
+                        descripcion = excluded.descripcion,
+                        fecha_vencimiento = excluded.fecha_vencimiento,
+                        estado = excluded.estado,
+                        updated_by = excluded.updated_by,
+                        updated_at = excluded.updated_at
+                """), payload)
+    clear_data_caches()
+
+
+def add_manual_task(engine: Engine, payload: dict[str, Any], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    clean_payload = {
+        "id_accion": payload.get("id_accion"),
+        "accion_titulo": safe_text(payload.get("accion_titulo")),
+        "proximos_pasos": safe_text(payload.get("proximos_pasos")),
+        "descripcion": safe_text(payload.get("descripcion")),
+        "responsable_seguimiento": safe_text(payload.get("responsable_seguimiento")),
+        "fecha_peticion": safe_text(payload.get("fecha_peticion")),
+        "fecha_vencimiento": safe_text(payload.get("fecha_vencimiento")),
+        "estado": safe_text(payload.get("estado")) or "No iniciado",
+        "created_by": user_name,
+        "created_at": now,
+        "updated_by": user_name,
+        "updated_at": now,
+    }
+    fields = list(clean_payload.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO manual_tasks ({", ".join(fields)})
+                VALUES ({", ".join([":" + f for f in fields])})
+            """),
+            clean_payload,
+        )
+    clear_data_caches()
+
+
+def update_manual_tasks(engine: Engine, tasks_df: pd.DataFrame, user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    if tasks_df.empty:
+        return
+    with engine.begin() as conn:
+        for _, row in tasks_df.iterrows():
+            task_id = int(row.get("task_id"))
+            id_value = row.get("id_accion")
+            try:
+                id_accion = int(id_value) if pd.notna(id_value) and str(id_value).strip() else None
+            except Exception:
+                id_accion = None
+            payload = {
+                "task_id": task_id,
+                "id_accion": id_accion,
+                "accion_titulo": safe_text(row.get("accion_titulo")),
+                "proximos_pasos": safe_text(row.get("proximos_pasos")),
+                "descripcion": safe_text(row.get("descripcion")),
+                "responsable_seguimiento": safe_text(row.get("responsable_seguimiento")),
+                "fecha_peticion": safe_text(row.get("fecha_peticion")),
+                "fecha_vencimiento": safe_text(row.get("fecha_vencimiento")),
+                "estado": safe_text(row.get("estado")) or "No iniciado",
+                "updated_by": user_name,
+                "updated_at": now,
+            }
+            conn.execute(text("""
+                UPDATE manual_tasks
+                SET id_accion = :id_accion,
+                    accion_titulo = :accion_titulo,
+                    proximos_pasos = :proximos_pasos,
+                    descripcion = :descripcion,
+                    responsable_seguimiento = :responsable_seguimiento,
+                    fecha_peticion = :fecha_peticion,
+                    fecha_vencimiento = :fecha_vencimiento,
+                    estado = :estado,
+                    updated_by = :updated_by,
+                    updated_at = :updated_at
+                WHERE task_id = :task_id
+            """), payload)
+    clear_data_caches()
+
+
+def delete_manual_task(engine: Engine, task_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM manual_tasks WHERE task_id = :task_id"), {"task_id": int(task_id)})
+    clear_data_caches()
+
+
+def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.DataFrame:
+    if data.empty:
+        return pd.DataFrame(columns=[
+            "task_key", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento",
+            "Fecha de petición", "Fecha de vencimiento", "Estado",
+        ])
+    rows = []
+    overrides_by_key = {}
+    if not overrides.empty:
+        overrides_by_key = {safe_text(row.get("task_key")): row for _, row in overrides.iterrows()}
+    for _, row in data.iterrows():
+        next_steps = safe_text(row.get("proximos_pasos"))
+        if not next_steps:
+            continue
+        id_accion = int(row.get("id_accion"))
+        task_key = f"accion_{id_accion}"
+        override = overrides_by_key.get(task_key)
+        default_request_date = safe_text(row.get("fecha_actualizacion")) or safe_text(row.get("updated_at")) or date.today().isoformat()
+        rows.append({
+            "task_key": task_key,
+            "Id_acción + Título": f"{id_accion:03d} - {safe_text(row.get('Título'))}",
+            "Próximos pasos": next_steps,
+            "Descripción": safe_text(override.get("descripcion")) if override is not None else "",
+            "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
+            "Fecha de petición": default_request_date[:10],
+            "Fecha de vencimiento": safe_text(override.get("fecha_vencimiento")) if override is not None else "",
+            "Estado": safe_text(override.get("estado")) if override is not None else "No iniciado",
+        })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "task_key", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento",
+            "Fecha de petición", "Fecha de vencimiento", "Estado",
+        ])
+    df["Estado"] = df["Estado"].apply(lambda x: x if x in TASK_STATUS_OPTIONS else "No iniciado")
+    return clean_interface_dataframe(df)
+
+
+
+def parse_iso_date(value: Any) -> date | None:
+    raw = safe_text(value)
+    if not raw:
+        return None
+    for candidate in [raw[:10], raw]:
+        try:
+            return datetime.fromisoformat(candidate).date()
+        except Exception:
+            pass
+    try:
+        parsed = pd.to_datetime(raw, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.date()
+    except Exception:
+        pass
+    return None
+
+
+def get_task_mail_config() -> dict[str, Any]:
+    """SMTP configuration for overdue-task reminders.
+
+    Required Streamlit Secrets:
+    - SMTP_HOST
+    - SMTP_USER
+    - SMTP_PASSWORD
+
+    Optional Streamlit Secrets:
+    - SMTP_PORT, default 587
+    - SMTP_USE_SSL, default false
+    - MAIL_FROM, default SMTP_USER
+    - TASK_REMINDER_TO, default osasunsarea@erandio.eus
+    - TASK_REMINDER_ENABLED, default true
+    """
+    enabled = get_secret("TASK_REMINDER_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+    host = get_secret("SMTP_HOST", "").strip()
+    user = get_secret("SMTP_USER", "").strip()
+    password = get_secret("SMTP_PASSWORD", "").strip()
+    try:
+        port = int(get_secret("SMTP_PORT", "587").strip() or "587")
+    except Exception:
+        port = 587
+    use_ssl = get_secret("SMTP_USE_SSL", "false").strip().lower() in {"1", "true", "yes", "on"}
+    return {
+        "enabled": enabled,
+        "host": host,
+        "port": port,
+        "user": user,
+        "password": password,
+        "use_ssl": use_ssl,
+        "mail_from": get_secret("MAIL_FROM", user or "").strip(),
+        "recipient": get_secret("TASK_REMINDER_TO", "osasunsarea@erandio.eus").strip(),
+    }
+
+
+def smtp_is_configured() -> bool:
+    cfg = get_task_mail_config()
+    return bool(cfg["enabled"] and cfg["host"] and cfg["user"] and cfg["password"] and cfg["mail_from"] and cfg["recipient"])
+
+
+def send_task_email(subject: str, body: str, recipient: str) -> None:
+    cfg = get_task_mail_config()
+    if not smtp_is_configured():
+        raise RuntimeError("SMTP no configurado. Faltan SMTP_HOST, SMTP_USER, SMTP_PASSWORD, MAIL_FROM o TASK_REMINDER_TO.")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["mail_from"]
+    msg["To"] = recipient
+    msg.set_content(body)
+    if cfg["use_ssl"]:
+        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20) as smtp:
+            smtp.login(cfg["user"], cfg["password"])
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(cfg["user"], cfg["password"])
+            smtp.send_message(msg)
+
+
+def get_sent_task_reminder_keys(engine: Engine) -> set[str]:
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(text("SELECT reminder_key FROM task_email_reminders WHERE status = 'sent'")).fetchall()
+        return {safe_text(row[0]) for row in rows}
+    except Exception:
+        return set()
+
+
+def record_task_reminder(engine: Engine, payload: dict[str, Any]) -> None:
+    fields = list(payload.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO task_email_reminders ({", ".join(fields)})
+                VALUES ({", ".join([":" + f for f in fields])})
+                ON CONFLICT(reminder_key) DO UPDATE SET
+                    sent_at = excluded.sent_at,
+                    status = excluded.status,
+                    error_message = excluded.error_message
+            """),
+            payload,
+        )
+
+
+def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[dict[str, Any]]:
+    """Return overdue, active tasks from both derived and manual task sources."""
+    today = date.today()
+    candidates: list[dict[str, Any]] = []
+
+    try:
+        overrides = get_task_overrides(engine)
+        action_tasks = build_action_task_rows(data, overrides)
+    except Exception:
+        action_tasks = pd.DataFrame()
+
+    if not action_tasks.empty:
+        for _, row in action_tasks.iterrows():
+            status = safe_text(row.get("Estado")) or "No iniciado"
+            if status in {"Completado", "Descartado"}:
+                continue
+            due_date = parse_iso_date(row.get("Fecha de vencimiento"))
+            if not due_date or due_date >= today:
+                continue
+            task_key = safe_text(row.get("task_key"))
+            action_label = safe_text(row.get("Id_acción + Título"))
+            id_accion = None
+            try:
+                id_accion = int(action_label.split(" - ", 1)[0])
+            except Exception:
+                pass
+            candidates.append({
+                "reminder_key": f"derived:{task_key}:{due_date.isoformat()}",
+                "task_source": "Ficha de evaluación",
+                "task_identifier": task_key,
+                "id_accion": id_accion,
+                "accion_titulo": action_label,
+                "proximos_pasos": safe_text(row.get("Próximos pasos")),
+                "descripcion": safe_text(row.get("Descripción")),
+                "responsable_seguimiento": safe_text(row.get("Responsable de seguimiento")),
+                "fecha_vencimiento": due_date.isoformat(),
+                "estado": status,
+            })
+
+    try:
+        manual_tasks = get_manual_tasks(engine)
+    except Exception:
+        manual_tasks = pd.DataFrame()
+    if not manual_tasks.empty:
+        for _, row in manual_tasks.iterrows():
+            status = safe_text(row.get("estado")) or "No iniciado"
+            if status in {"Completado", "Descartado"}:
+                continue
+            due_date = parse_iso_date(row.get("fecha_vencimiento"))
+            if not due_date or due_date >= today:
+                continue
+            task_id = safe_text(row.get("task_id"))
+            id_accion = None
+            try:
+                id_value = row.get("id_accion")
+                id_accion = int(id_value) if pd.notna(id_value) and safe_text(id_value) else None
+            except Exception:
+                id_accion = None
+            accion_titulo = safe_text(row.get("accion_titulo"))
+            if id_accion:
+                action_label = f"{id_accion:03d} - {accion_titulo}"
+            else:
+                action_label = "Sin acción asociada"
+            candidates.append({
+                "reminder_key": f"manual:{task_id}:{due_date.isoformat()}",
+                "task_source": "Tarea manual",
+                "task_identifier": task_id,
+                "id_accion": id_accion,
+                "accion_titulo": action_label,
+                "proximos_pasos": safe_text(row.get("proximos_pasos")),
+                "descripcion": safe_text(row.get("descripcion")),
+                "responsable_seguimiento": safe_text(row.get("responsable_seguimiento")),
+                "fecha_vencimiento": due_date.isoformat(),
+                "estado": status,
+            })
+    return candidates
+
+
+def send_overdue_task_reminders(engine: Engine, data: pd.DataFrame, force: bool = False) -> tuple[int, list[str]]:
+    """Send one reminder per overdue task/due-date.
+
+    Streamlit Cloud is not a background worker. This check runs when the app is opened
+    or when Administración explicitly forces it. The reminder table prevents duplicate
+    sends for the same task and due date.
+    """
+    cfg = get_task_mail_config()
+    if not cfg["enabled"]:
+        return 0, ["Recordatorios de tareas desactivados por TASK_REMINDER_ENABLED."]
+    if not smtp_is_configured():
+        return 0, ["Correo no configurado: faltan secretos SMTP."]
+
+    already_sent = get_sent_task_reminder_keys(engine)
+    candidates = build_overdue_task_candidates(data, engine)
+    to_send = [item for item in candidates if force or item["reminder_key"] not in already_sent]
+    sent_count = 0
+    errors: list[str] = []
+    recipient = cfg["recipient"]
+    now = datetime.now().isoformat(timespec="seconds")
+    for task in to_send:
+        subject = f"Tarea vencida: {task['accion_titulo']}"
+        body = "\n".join([
+            "Se ha detectado una tarea vencida en la herramienta Erandio Mugitzen ari da!.",
+            "",
+            f"Origen: {task['task_source']}",
+            f"Actividad: {task['accion_titulo']}",
+            f"Próximos pasos: {task['proximos_pasos'] or '-'}",
+            f"Descripción: {task['descripcion'] or '-'}",
+            f"Responsable de seguimiento: {task['responsable_seguimiento'] or '-'}",
+            f"Fecha de vencimiento: {task['fecha_vencimiento']}",
+            f"Estado: {task['estado']}",
+            "",
+            "Revisa la pestaña Tareas para actualizar el estado o la fecha de vencimiento.",
+        ])
+        record_payload = {
+            "reminder_key": task["reminder_key"],
+            "task_source": task["task_source"],
+            "task_identifier": safe_text(task["task_identifier"]),
+            "id_accion": task.get("id_accion"),
+            "accion_titulo": task["accion_titulo"],
+            "proximos_pasos": task["proximos_pasos"],
+            "responsable_seguimiento": task["responsable_seguimiento"],
+            "fecha_vencimiento": task["fecha_vencimiento"],
+            "recipient": recipient,
+            "sent_at": now,
+            "status": "sent",
+            "error_message": "",
+        }
+        try:
+            send_task_email(subject, body, recipient)
+            record_task_reminder(engine, record_payload)
+            sent_count += 1
+        except Exception as exc:
+            record_payload["status"] = "error"
+            record_payload["error_message"] = safe_text(exc)[:500]
+            try:
+                record_task_reminder(engine, record_payload)
+            except Exception:
+                pass
+            errors.append(f"{task['accion_titulo']}: {exc}")
+    clear_data_caches()
+    return sent_count, errors
+
+
+def maybe_send_overdue_task_reminders(engine: Engine, data: pd.DataFrame) -> None:
+    """Run a light automatic reminder check at most once per browser session/day."""
+    session_key = f"task_reminder_check_{date.today().isoformat()}"
+    if st.session_state.get(session_key):
+        return
+    st.session_state[session_key] = True
+    sent, errors = send_overdue_task_reminders(engine, data, force=False)
+    st.session_state["task_reminder_last_result"] = {"sent": sent, "errors": errors, "checked_at": datetime.now().isoformat(timespec="seconds")}
+
+def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
+    st.subheader("Tareas")
+    st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de evaluación y tareas añadidas manualmente.")
+
+    overrides = get_task_overrides(engine)
+    action_tasks = build_action_task_rows(data, overrides)
+
+    st.markdown("### Tareas generadas desde Próximos pasos")
+    st.caption("Se nutren automáticamente del campo Próximos pasos de cada Ficha de evaluación. Puedes completar descripción, vencimiento y estado.")
+    if action_tasks.empty:
+        st.info("Todavía no hay próximos pasos registrados en las fichas de evaluación.")
+    else:
+        edited_action_tasks = st.data_editor(
+            action_tasks,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["task_key", "Id_acción + Título", "Próximos pasos", "Responsable de seguimiento", "Fecha de petición"],
+            column_config={
+                "task_key": None,
+                "Id_acción + Título": st.column_config.TextColumn("Id_acción + Título", width="large"),
+                "Próximos pasos": st.column_config.TextColumn("Próximos pasos", width="large"),
+                "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+                "Responsable de seguimiento": st.column_config.TextColumn("Responsable de seguimiento", width="medium"),
+                "Fecha de petición": st.column_config.TextColumn("Fecha de petición", width="small"),
+                "Fecha de vencimiento": st.column_config.TextColumn("Fecha de vencimiento", help="Formato recomendado: AAAA-MM-DD", width="small"),
+                "Estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
+            },
+            key="action_tasks_editor",
+        )
+        if st.button("Guardar cambios en tareas de fichas", key="save_action_tasks"):
+            if not user_name:
+                st.error("Antes de guardar, escribe tu nombre o entra con un perfil identificado.")
+            else:
+                save_task_overrides(engine, edited_action_tasks, user_name)
+                st.success("Tareas actualizadas.")
+                st.rerun()
+
+    st.markdown("### Tareas manuales")
+    with st.expander("Añadir tarea manual", expanded=False):
+        action_options = ["Sin acción asociada"] + data.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
+        with st.form("manual_task_form", clear_on_submit=True):
+            selected_action = st.selectbox("Id_acción + Título", action_options)
+            manual_next_steps = st.text_area("Próximos pasos")
+            manual_description = st.text_area("Descripción")
+            c1, c2 = st.columns(2)
+            manual_responsible = c1.text_input("Responsable de seguimiento")
+            manual_request_date = c2.date_input("Fecha de petición", value=date.today())
+            c3, c4 = st.columns(2)
+            manual_due_date = c3.date_input("Fecha de vencimiento", value=date.today())
+            manual_status = c4.selectbox("Estado", TASK_STATUS_OPTIONS)
+            submitted = st.form_submit_button("Añadir tarea")
+        if submitted:
+            if not user_name:
+                st.error("Antes de añadir una tarea, escribe tu nombre o entra con un perfil identificado.")
+            elif not safe_text(manual_next_steps) and not safe_text(manual_description):
+                st.error("Introduce al menos Próximos pasos o Descripción.")
+            else:
+                id_accion = None
+                action_title = ""
+                if selected_action != "Sin acción asociada":
+                    id_accion = int(selected_action.split(" - ")[0])
+                    action_title = selected_action.split(" - ", 1)[1]
+                add_manual_task(engine, {
+                    "id_accion": id_accion,
+                    "accion_titulo": action_title,
+                    "proximos_pasos": manual_next_steps,
+                    "descripcion": manual_description,
+                    "responsable_seguimiento": manual_responsible,
+                    "fecha_peticion": manual_request_date.isoformat(),
+                    "fecha_vencimiento": manual_due_date.isoformat(),
+                    "estado": manual_status,
+                }, user_name)
+                st.success("Tarea manual añadida.")
+                st.rerun()
+
+    manual_tasks = get_manual_tasks(engine)
+    if manual_tasks.empty:
+        st.info("Todavía no hay tareas manuales.")
+    else:
+        visible_manual = manual_tasks.copy()
+        visible_manual["Id_acción + Título"] = visible_manual.apply(
+            lambda row: f"{int(row['id_accion']):03d} - {safe_text(row.get('accion_titulo'))}" if pd.notna(row.get("id_accion")) and safe_text(row.get("id_accion")) not in ["", "0"] else "Sin acción asociada",
+            axis=1,
+        )
+        editor_cols = [
+            "task_id", "id_accion", "accion_titulo", "Id_acción + Título", "proximos_pasos", "descripcion",
+            "responsable_seguimiento", "fecha_peticion", "fecha_vencimiento", "estado",
+        ]
+        edited_manual = st.data_editor(
+            visible_manual[editor_cols],
+            use_container_width=True,
+            hide_index=True,
+            disabled=["task_id", "id_accion", "accion_titulo", "Id_acción + Título"],
+            column_config={
+                "task_id": None,
+                "id_accion": None,
+                "accion_titulo": None,
+                "Id_acción + Título": st.column_config.TextColumn("Id_acción + Título", width="large"),
+                "proximos_pasos": st.column_config.TextColumn("Próximos pasos", width="large"),
+                "descripcion": st.column_config.TextColumn("Descripción", width="large"),
+                "responsable_seguimiento": st.column_config.TextColumn("Responsable de seguimiento", width="medium"),
+                "fecha_peticion": st.column_config.TextColumn("Fecha de petición", width="small"),
+                "fecha_vencimiento": st.column_config.TextColumn("Fecha de vencimiento", help="Formato recomendado: AAAA-MM-DD", width="small"),
+                "estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
+            },
+            key="manual_tasks_editor",
+        )
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("Guardar cambios en tareas manuales", key="save_manual_tasks"):
+                if not user_name:
+                    st.error("Antes de guardar, escribe tu nombre o entra con un perfil identificado.")
+                else:
+                    update_manual_tasks(engine, edited_manual.rename(columns={
+                        "proximos_pasos": "proximos_pasos",
+                        "descripcion": "descripcion",
+                        "responsable_seguimiento": "responsable_seguimiento",
+                        "fecha_peticion": "fecha_peticion",
+                        "fecha_vencimiento": "fecha_vencimiento",
+                        "estado": "estado",
+                    }), user_name)
+                    st.success("Tareas manuales actualizadas.")
+                    st.rerun()
+        with c2:
+            task_ids = visible_manual["task_id"].astype(int).tolist()
+            delete_id = st.selectbox("Eliminar tarea manual", task_ids, format_func=lambda x: f"Tarea {x}", key="delete_manual_task_select")
+            if st.button("Eliminar tarea seleccionada", key="delete_manual_task"):
+                delete_manual_task(engine, int(delete_id))
+                st.success("Tarea eliminada.")
+                st.rerun()
+
+    combined = []
+    if not action_tasks.empty:
+        derived = action_tasks.copy()
+        derived["Origen"] = "Ficha de evaluación"
+        combined.append(derived[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
+    if not manual_tasks.empty:
+        manual_export = visible_manual.rename(columns={
+            "proximos_pasos": "Próximos pasos",
+            "descripcion": "Descripción",
+            "responsable_seguimiento": "Responsable de seguimiento",
+            "fecha_peticion": "Fecha de petición",
+            "fecha_vencimiento": "Fecha de vencimiento",
+            "estado": "Estado",
+        }).copy()
+        manual_export["Origen"] = "Manual"
+        combined.append(manual_export[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
+    if combined:
+        export_df = pd.concat(combined, ignore_index=True)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            export_df.to_excel(writer, index=False, sheet_name="Tareas")
+        st.download_button(
+            "Descargar tareas en Excel",
+            buffer.getvalue(),
+            "tareas.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+
 def render_dashboard(df: pd.DataFrame) -> None:
     chart_df = df.copy()
 
@@ -2003,6 +2657,56 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     if st.session_state.get("role") == "admin":
         render_questionnaire_results(engine, selected_id)
 
+
+@st.cache_data(ttl=120, show_spinner=False)
+def get_task_email_reminders(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    try:
+        with engine.begin() as conn:
+            df = pd.read_sql_query(text("SELECT * FROM task_email_reminders ORDER BY sent_at DESC"), conn)
+    except Exception:
+        return pd.DataFrame(columns=[
+            "reminder_key", "task_source", "task_identifier", "id_accion", "accion_titulo", "proximos_pasos",
+            "responsable_seguimiento", "fecha_vencimiento", "recipient", "sent_at", "status", "error_message",
+        ])
+    return clean_interface_dataframe(df)
+
+
+def render_task_reminder_admin(data: pd.DataFrame, engine: Engine) -> None:
+    st.markdown("### Recordatorios de tareas vencidas")
+    cfg = get_task_mail_config()
+    if not cfg["enabled"]:
+        st.warning("Los recordatorios están desactivados por TASK_REMINDER_ENABLED.")
+    elif smtp_is_configured():
+        st.success(f"Correo configurado. Destinatario de avisos: {cfg['recipient']}")
+    else:
+        st.warning("Correo no configurado. Añade SMTP_HOST, SMTP_USER, SMTP_PASSWORD, MAIL_FROM y TASK_REMINDER_TO en Secrets.")
+
+    overdue = build_overdue_task_candidates(data, engine)
+    sent_keys = get_sent_task_reminder_keys(engine)
+    pending = [item for item in overdue if item["reminder_key"] not in sent_keys]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Tareas vencidas activas", len(overdue))
+    c2.metric("Avisos pendientes", len(pending))
+    c3.metric("Avisos ya enviados", len(sent_keys))
+
+    if pending:
+        st.dataframe(pd.DataFrame(pending)[["accion_titulo", "proximos_pasos", "responsable_seguimiento", "fecha_vencimiento", "estado"]], use_container_width=True, hide_index=True)
+    if st.button("Comprobar y enviar avisos pendientes", key="send_overdue_task_reminders_admin"):
+        sent, errors = send_overdue_task_reminders(engine, data, force=False)
+        if sent:
+            st.success(f"Avisos enviados: {sent}")
+        if errors:
+            st.error("No se han podido enviar algunos avisos:\n" + "\n".join(errors[:5]))
+        if not sent and not errors:
+            st.info("No había avisos pendientes de envío.")
+        st.rerun()
+
+    reminders = get_task_email_reminders(engine)
+    if not reminders.empty:
+        st.markdown("#### Últimos avisos registrados")
+        st.dataframe(reminders.head(30), use_container_width=True, hide_index=True)
+
 def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> None:
     st.subheader("Administración")
     st.write("Estado de conexión:", "PostgreSQL/Supabase" if is_postgres(engine) else "SQLite local")
@@ -2015,6 +2719,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         st.info("Todavía no hay accesos registrados.")
     else:
         st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
+    render_task_reminder_admin(data, engine)
     render_questionnaire_results(engine)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
@@ -2024,6 +2729,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         history.to_excel(writer, index=False, sheet_name="Historico")
         get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
         get_questionnaire_responses(engine).to_excel(writer, index=False, sheet_name="Cuestionarios")
+        get_task_email_reminders(engine).to_excel(writer, index=False, sheet_name="Avisos tareas")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -2121,12 +2827,13 @@ def main() -> None:
         data[optional_col] = data[optional_col].fillna(default_value)
 
     data = apply_profile_scope(data)
+    maybe_send_overdue_task_reminders(engine, data)
     filtered = filter_dataframe(data)
 
     if st.session_state.get("role") == "admin":
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud", "Evolución", "Administración"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Red Local de Salud", "Evolución", "Administración"]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
@@ -2143,6 +2850,9 @@ def main() -> None:
 
     elif selected_page == "Ficha de evaluación":
         render_action_detail(filtered, data, user_name, engine)
+
+    elif selected_page == "Tareas":
+        render_tasks(data, user_name, engine)
 
     elif selected_page == "Red Local de Salud":
         with st.spinner("Cargando Red Local de Salud..."):
