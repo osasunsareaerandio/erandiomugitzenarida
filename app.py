@@ -135,7 +135,7 @@ def apply_brand_theme() -> None:
             border-radius: 0.9rem;
         }}
 
-        /* Botones: principal en azul marino; hover celeste. */
+        /* Botones: principal en azul marino; texto siempre blanco; hover celeste. */
         .stButton > button,
         .stDownloadButton > button,
         button[kind="primary"] {{
@@ -146,10 +146,23 @@ def apply_brand_theme() -> None:
             font-weight: 650 !important;
         }}
 
+        .stButton > button *,
+        .stDownloadButton > button *,
+        button[kind="primary"] * {{
+            color: var(--brand-white) !important;
+        }}
+
         .stButton > button:hover,
-        .stDownloadButton > button:hover {{
+        .stDownloadButton > button:hover,
+        button[kind="primary"]:hover {{
             background-color: var(--brand-sky) !important;
             border-color: var(--brand-sky) !important;
+            color: var(--brand-white) !important;
+        }}
+
+        .stButton > button:hover *,
+        .stDownloadButton > button:hover *,
+        button[kind="primary"]:hover * {{
             color: var(--brand-white) !important;
         }}
 
@@ -165,23 +178,36 @@ def apply_brand_theme() -> None:
             box-shadow: 0 0 0 1px var(--brand-sky) !important;
         }}
 
-        /* Tabs: blanco dominante y marcador coral. */
+        /* Tabs: blanco dominante, más aire entre pestañas y marcador coral. */
         div[data-baseweb="tab-list"] {{
-            gap: 0.25rem;
+            gap: 0.85rem !important;
             border-bottom: 1px solid var(--brand-line);
+            padding-top: 0.25rem;
+            padding-bottom: 0.25rem;
+            flex-wrap: wrap;
         }}
 
         button[data-baseweb="tab"] {{
             color: var(--brand-navy) !important;
             font-weight: 650;
             background: var(--brand-white) !important;
-            border-radius: 0.55rem 0.55rem 0 0;
+            border-radius: 0.65rem 0.65rem 0 0;
+            padding: 0.65rem 0.95rem !important;
+            min-height: 2.55rem;
+        }}
+
+        button[data-baseweb="tab"] * {{
+            color: var(--brand-navy) !important;
         }}
 
         button[data-baseweb="tab"][aria-selected="true"] {{
             color: var(--brand-coral) !important;
             border-bottom: 4px solid var(--brand-coral) !important;
             background: rgba(233, 92, 71, 0.05) !important;
+        }}
+
+        button[data-baseweb="tab"][aria-selected="true"] * {{
+            color: var(--brand-coral) !important;
         }}
 
         /* Métricas: tarjetas blancas, acento dorado. */
@@ -421,6 +447,24 @@ def init_db(engine: Engine) -> None:
             )
             """
         ))
+        contact_id_type = "SERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS contacts (
+                contacto_id {contact_id_type},
+                Categoria TEXT,
+                Subcategoria TEXT,
+                Comisión TEXT,
+                Perfil TEXT,
+                Entidad TEXT,
+                Teléfono TEXT,
+                Persona TEXT,
+                Mail TEXT,
+                updated_by TEXT,
+                updated_at TEXT
+            )
+            """
+        ))
     for table_name in ["evaluations", "evaluation_history"]:
         if not column_exists(engine, table_name, "updated_by"):
             with engine.begin() as conn:
@@ -478,6 +522,92 @@ def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int]
                 """),
                 {"id_accion": id_accion, "contacto_id": contacto_id, "assigned_by": user_name, "assigned_at": now},
             )
+
+
+
+def seed_contacts_if_empty(engine: Engine) -> None:
+    """Carga Contactos.xlsx en la base de datos una sola vez si la tabla contacts está vacía."""
+    with engine.begin() as conn:
+        count = conn.execute(text("SELECT COUNT(*) FROM contacts")).scalar() or 0
+    if count > 0 or not CONTACTS_EXCEL.exists():
+        return
+    seed = load_default_contacts()
+    if seed.empty:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        for _, row in seed.iterrows():
+            payload = {col: safe_text(row.get(col)) for col in CONTACT_COLUMNS}
+            payload.update({"updated_by": "carga inicial", "updated_at": now})
+            fields = list(payload.keys())
+            conn.execute(
+                text(f"""
+                    INSERT INTO contacts ({", ".join(fields)})
+                    VALUES ({", ".join([":" + f for f in fields])})
+                """),
+                payload,
+            )
+
+
+def get_contacts(engine: Engine) -> pd.DataFrame:
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM contacts ORDER BY contacto_id ASC"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"])
+    df["contacto_id"] = df["contacto_id"].astype(int)
+    for col in CONTACT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].apply(safe_text)
+    df["contacto_label"] = df.apply(make_contact_label, axis=1)
+    return df[["contacto_id", *CONTACT_COLUMNS, "updated_by", "updated_at", "contacto_label"]]
+
+
+def add_contact(engine: Engine, data: dict[str, Any], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {col: safe_text(data.get(col)) for col in CONTACT_COLUMNS}
+    payload.update({"updated_by": user_name, "updated_at": now})
+    fields = list(payload.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO contacts ({", ".join(fields)})
+                VALUES ({", ".join([":" + f for f in fields])})
+            """),
+            payload,
+        )
+
+
+def update_contacts(engine: Engine, contacts_df: pd.DataFrame, user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        for _, row in contacts_df.iterrows():
+            contacto_id = int(row["contacto_id"])
+            payload = {col: safe_text(row.get(col)) for col in CONTACT_COLUMNS}
+            payload.update({"updated_by": user_name, "updated_at": now, "contacto_id": contacto_id})
+            conn.execute(
+                text("""
+                    UPDATE contacts
+                    SET Categoria = :Categoria,
+                        Subcategoria = :Subcategoria,
+                        Comisión = :Comisión,
+                        Perfil = :Perfil,
+                        Entidad = :Entidad,
+                        Teléfono = :Teléfono,
+                        Persona = :Persona,
+                        Mail = :Mail,
+                        updated_by = :updated_by,
+                        updated_at = :updated_at
+                    WHERE contacto_id = :contacto_id
+                """),
+                payload,
+            )
+
+
+def delete_contact(engine: Engine, contacto_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM action_contacts WHERE contacto_id = :contacto_id"), {"contacto_id": contacto_id})
+        conn.execute(text("DELETE FROM contacts WHERE contacto_id = :contacto_id"), {"contacto_id": contacto_id})
 
 
 def build_assignment_summary(assignments: pd.DataFrame, contacts: pd.DataFrame) -> pd.DataFrame:
@@ -710,17 +840,53 @@ def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFra
     )
 
 
-def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.DataFrame) -> None:
+def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Red Local de Salud")
     if contacts.empty:
-        st.info("No se ha encontrado el archivo data/Contactos.xlsx o no contiene contactos.")
-        return
+        st.info("Todavía no hay contactos. Puedes crear el primer registro desde el formulario inferior.")
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Contactos", len(contacts))
-    col2.metric("Entidades", contacts["Entidad"].replace("", pd.NA).dropna().nunique())
-    col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique())
+    col2.metric("Entidades", contacts["Entidad"].replace("", pd.NA).dropna().nunique() if not contacts.empty else 0)
+    col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique() if not contacts.empty else 0)
     col4.metric("Contactos asignados", assignments["contacto_id"].nunique() if not assignments.empty else 0)
+
+    with st.expander("Añadir nueva persona", expanded=contacts.empty):
+        with st.form("add_contact_form", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            persona = c1.text_input("Persona")
+            entidad = c2.text_input("Entidad")
+            c3, c4 = st.columns(2)
+            categoria = c3.text_input("Categoría")
+            subcategoria = c4.text_input("Subcategoría")
+            c5, c6 = st.columns(2)
+            comision = c5.text_input("Comisión")
+            perfil = c6.text_input("Perfil")
+            c7, c8 = st.columns(2)
+            telefono = c7.text_input("Teléfono")
+            mail = c8.text_input("Mail")
+            submitted = st.form_submit_button("Añadir persona")
+        if submitted:
+            if not user_name:
+                st.error("Antes de añadir una persona, escribe tu nombre en la barra lateral.")
+            elif not safe_text(persona) and not safe_text(entidad):
+                st.error("Introduce al menos la persona o la entidad.")
+            else:
+                add_contact(engine, {
+                    "Categoria": categoria,
+                    "Subcategoria": subcategoria,
+                    "Comisión": comision,
+                    "Perfil": perfil,
+                    "Entidad": entidad,
+                    "Teléfono": telefono,
+                    "Persona": persona,
+                    "Mail": mail,
+                }, user_name)
+                st.success("Persona añadida a la Red Local de Salud.")
+                st.rerun()
+
+    if contacts.empty:
+        return
 
     with st.expander("Filtros", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
@@ -753,19 +919,56 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     filtered["acciones_asignadas"] = filtered["acciones_asignadas"].fillna("")
     filtered["num_acciones"] = filtered["num_acciones"].fillna(0).astype(int)
 
-    visible = ["contacto_id", "Categoria", "Subcategoria", "Comisión", "Perfil", "Entidad", "Persona", "Teléfono", "Mail", "num_acciones", "acciones_asignadas"]
-    st.dataframe(filtered[visible], use_container_width=True, hide_index=True)
+    st.markdown("### Listado editable")
+    st.caption("Edita los campos directamente en la tabla y pulsa Guardar cambios. El ID, las acciones asignadas y el número de acciones son campos de consulta.")
+    editable_cols = ["contacto_id", *CONTACT_COLUMNS, "num_acciones", "acciones_asignadas"]
+    edited = st.data_editor(
+        filtered[editable_cols],
+        use_container_width=True,
+        hide_index=True,
+        disabled=["contacto_id", "num_acciones", "acciones_asignadas"],
+        key="contacts_editor",
+        column_config={
+            "contacto_id": st.column_config.NumberColumn("ID", width="small"),
+            "acciones_asignadas": st.column_config.TextColumn("Acciones asignadas", width="large"),
+            "num_acciones": st.column_config.NumberColumn("Nº acciones", width="small"),
+        },
+    )
+
+    b1, b2, b3 = st.columns([1.15, 1.15, 4])
+    with b1:
+        if st.button("Guardar cambios", key="save_contacts_changes"):
+            if not user_name:
+                st.error("Antes de guardar cambios, escribe tu nombre en la barra lateral.")
+            else:
+                update_contacts(engine, edited[["contacto_id", *CONTACT_COLUMNS]], user_name)
+                st.success("Cambios guardados en la Red Local de Salud.")
+                st.rerun()
+    with b2:
+        with st.popover("Eliminar persona"):
+            delete_options = filtered["contacto_id"].astype(int).tolist()
+            label_by_id = dict(zip(filtered["contacto_id"], filtered["contacto_label"]))
+            selected_delete = st.selectbox(
+                "Selecciona la persona a eliminar",
+                delete_options,
+                format_func=lambda cid: label_by_id.get(cid, str(cid)),
+                key="delete_contact_select",
+            )
+            st.warning("Al eliminarla también se borrarán sus asignaciones a acciones.")
+            if st.button("Confirmar eliminación", key="confirm_delete_contact"):
+                delete_contact(engine, int(selected_delete))
+                st.success("Persona eliminada.")
+                st.rerun()
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        filtered[visible].to_excel(writer, index=False, sheet_name="Red Local Salud")
+        filtered[editable_cols].to_excel(writer, index=False, sheet_name="Red Local Salud")
     st.download_button(
         "Descargar contactos filtrados en Excel",
         buffer.getvalue(),
         "red_local_salud_contactos.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
 
 def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataFrame) -> None:
     st.subheader("Evolución temporal")
@@ -927,7 +1130,8 @@ def main() -> None:
     matrix = read_excel_bytes(uploaded.getvalue()) if uploaded is not None else load_default_matrix()
     evaluations = get_evaluations(engine)
     history = get_history(engine)
-    contacts = load_default_contacts()
+    seed_contacts_if_empty(engine)
+    contacts = get_contacts(engine)
     assignments = get_action_contacts(engine)
     data = merge_matrix_evaluations(matrix, evaluations)
     data = merge_assignments(data, assignments, contacts)
@@ -945,7 +1149,7 @@ def main() -> None:
     with tabs[2]:
         render_action_detail(filtered, data, user_name, engine)
     with tabs[3]:
-        render_contacts(contacts, assignments, data)
+        render_contacts(contacts, assignments, data, user_name, engine)
     with tabs[4]:
         render_evolution(filtered, data, history)
     with tabs[5]:
