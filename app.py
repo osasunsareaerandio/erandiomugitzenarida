@@ -1782,6 +1782,35 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
+
+def render_questionnaire_link_card(title: str, url: str, description: str = "") -> None:
+    """Renderiza una tarjeta limpia para abrir y copiar enlaces de cuestionario."""
+    clean_title = safe_text(title)
+    clean_url = safe_text(url)
+    clean_description = safe_text(description)
+    if not clean_url:
+        st.info("Todavía no hay enlace disponible.")
+        return
+
+    st.markdown(
+        f"""
+        <div class="questionnaire-card">
+            <div class="questionnaire-card-title">{clean_title}</div>
+            <div class="questionnaire-card-description">{clean_description}</div>
+            <a class="questionnaire-card-button" href="{clean_url}" target="_blank" rel="noopener noreferrer">Abrir cuestionario</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    safe_key = re.sub(r"[^a-zA-Z0-9_]+", "_", clean_title.lower())
+    with st.expander(f"Copiar enlace - {clean_title}", expanded=False):
+        st.text_input(
+            "Enlace",
+            value=clean_url,
+            key=f"copy_link_{safe_key}_{abs(hash(clean_url))}",
+            label_visibility="collapsed",
+        )
+
 def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if df.empty:
         st.info("No hay acciones para los filtros seleccionados.")
