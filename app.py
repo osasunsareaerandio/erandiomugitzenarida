@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import calendar
+import html
 import io
 import os
 import re
@@ -2032,7 +2034,7 @@ def delete_calendar_event(engine: Engine, event_id: int) -> None:
 
 def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Calendario")
-    st.caption("Agenda conjunta de eventos, reuniones, hitos y tareas programadas.")
+    st.caption("Vista anual de eventos, reuniones, hitos y tareas programadas.")
 
     events = get_calendar_events(engine)
     task_calendar = combine_task_rows_for_calendar(data, engine)
@@ -2077,14 +2079,14 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                     "responsable": responsable,
                 }, user_name)
                 st.success("Evento añadido al calendario.")
+                clear_cached_data()
                 st.rerun()
 
     today = date.today()
-    c1, c2, c3 = st.columns(3)
-    start_filter = c1.date_input("Desde", value=today.replace(day=1), key="calendar_start_filter")
-    end_filter = c2.date_input("Hasta", value=today, key="calendar_end_filter")
-    item_filter = c3.selectbox("Mostrar", CALENDAR_ITEM_TYPES, key="calendar_type_filter")
-    search = st.text_input("Buscar en calendario", placeholder="Título, descripción, responsable, lugar...")
+    c1, c2, c3 = st.columns([1, 1, 2])
+    year = c1.selectbox("Año", list(range(today.year - 1, today.year + 4)), index=1, key="calendar_year_view")
+    item_filter = c2.selectbox("Mostrar", CALENDAR_ITEM_TYPES, key="calendar_type_filter")
+    search = c3.text_input("Buscar", placeholder="Título, descripción, responsable, lugar...")
 
     agenda_rows: list[dict[str, Any]] = []
     if item_filter in {"Todos", "Eventos/Reuniones"} and not events.empty:
@@ -2108,14 +2110,191 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if not agenda.empty:
         agenda["fecha_dt"] = pd.to_datetime(agenda["fecha"], errors="coerce")
         agenda = agenda.dropna(subset=["fecha_dt"])
-        agenda = agenda[(agenda["fecha_dt"].dt.date >= start_filter) & (agenda["fecha_dt"].dt.date <= end_filter)]
+        agenda = agenda[agenda["fecha_dt"].dt.year == int(year)]
         if search:
-            haystack = agenda[["titulo", "descripcion", "responsable", "ubicacion", "estado"]].fillna("").agg(" ".join, axis=1).str.lower()
+            haystack = agenda[["titulo", "descripcion", "responsable", "ubicacion", "estado", "tipo", "origen"]].fillna("").agg(" ".join, axis=1).str.lower()
             agenda = agenda[haystack.str.contains(search.lower(), regex=False)]
         agenda = agenda.sort_values(["fecha_dt", "hora", "tipo", "titulo"])
 
+    def event_color(tipo: str, origen: str, estado: str) -> str:
+        tipo_l = safe_text(tipo).lower()
+        origen_l = safe_text(origen).lower()
+        estado_l = safe_text(estado).lower()
+        if "tarea" in origen_l or "tarea" in tipo_l:
+            if estado_l == "completado":
+                return COLOR_SKY
+            if estado_l == "descartado":
+                return COLOR_MAUVE
+            return COLOR_GOLD
+        if "reun" in tipo_l:
+            return COLOR_CORAL
+        if "actividad" in tipo_l:
+            return COLOR_SKY
+        if "hito" in tipo_l:
+            return COLOR_MAUVE
+        return COLOR_NAVY
+
+    def build_events_by_day(df: pd.DataFrame) -> dict[date, list[dict[str, str]]]:
+        grouped: dict[date, list[dict[str, str]]] = {}
+        if df.empty:
+            return grouped
+        for _, row in df.iterrows():
+            day_value = row.get("fecha_dt")
+            if pd.isna(day_value):
+                continue
+            day = day_value.date()
+            grouped.setdefault(day, []).append({
+                "hora": safe_text(row.get("hora")),
+                "tipo": safe_text(row.get("tipo")),
+                "origen": safe_text(row.get("origen")),
+                "titulo": safe_text(row.get("titulo")),
+                "descripcion": safe_text(row.get("descripcion")),
+                "responsable": safe_text(row.get("responsable")),
+                "estado": safe_text(row.get("estado")),
+                "ubicacion": safe_text(row.get("ubicacion")),
+            })
+        return grouped
+
+    events_by_day = build_events_by_day(agenda)
+
+    st.markdown("### Vista anual")
     if agenda.empty:
-        st.info("No hay eventos ni tareas para los filtros seleccionados.")
+        st.info("No hay eventos ni tareas para el año y filtros seleccionados.")
+    else:
+        total_items = len(agenda)
+        total_days = agenda["fecha_dt"].dt.date.nunique()
+        st.caption(f"{total_items} entradas distribuidas en {total_days} días de {year}.")
+
+    st.markdown(
+        f"""
+        <style>
+        .year-calendar-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 18px;
+            margin-top: 12px;
+        }}
+        .month-card {{
+            background: #FFFFFF;
+            border: 1px solid rgba(28,48,84,0.18);
+            border-radius: 18px;
+            padding: 14px;
+            box-shadow: 0 4px 14px rgba(28,48,84,0.06);
+        }}
+        .month-title {{
+            font-weight: 800;
+            color: {COLOR_NAVY};
+            font-size: 1rem;
+            margin-bottom: 10px;
+            letter-spacing: .2px;
+        }}
+        .month-weekdays, .month-days {{
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 4px;
+        }}
+        .weekday-cell {{
+            text-align: center;
+            color: {COLOR_NAVY};
+            font-size: .68rem;
+            font-weight: 700;
+            opacity: .72;
+            padding-bottom: 4px;
+        }}
+        .day-cell {{
+            min-height: 54px;
+            border-radius: 10px;
+            background: #FFFFFF;
+            border: 1px solid rgba(28,48,84,0.10);
+            padding: 4px;
+            overflow: hidden;
+        }}
+        .day-cell.muted {{
+            background: rgba(28,48,84,0.025);
+            opacity: .42;
+        }}
+        .day-cell.today {{
+            border: 2px solid {COLOR_CORAL};
+        }}
+        .day-number {{
+            color: {COLOR_NAVY};
+            font-weight: 800;
+            font-size: .72rem;
+            line-height: 1;
+            margin-bottom: 3px;
+        }}
+        .day-items {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }}
+        .day-item {{
+            color: #FFFFFF;
+            font-size: .58rem;
+            line-height: 1.15;
+            border-radius: 5px;
+            padding: 2px 3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .more-items {{
+            color: {COLOR_NAVY};
+            font-size: .56rem;
+            font-weight: 700;
+            padding-left: 2px;
+        }}
+        @media (max-width: 1100px) {{
+            .year-calendar-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        }}
+        @media (max-width: 750px) {{
+            .year-calendar-grid {{ grid-template-columns: 1fr; }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    month_names = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+    weekday_names = ["L", "M", "X", "J", "V", "S", "D"]
+    cal = calendar.Calendar(firstweekday=0)
+    html_parts = ['<div class="year-calendar-grid">']
+    for month in range(1, 13):
+        html_parts.append('<div class="month-card">')
+        html_parts.append(f'<div class="month-title">{month_names[month - 1]}</div>')
+        html_parts.append('<div class="month-weekdays">')
+        for wd in weekday_names:
+            html_parts.append(f'<div class="weekday-cell">{wd}</div>')
+        html_parts.append('</div><div class="month-days">')
+        for week in cal.monthdatescalendar(int(year), month):
+            for day in week:
+                classes = ["day-cell"]
+                if day.month != month:
+                    classes.append("muted")
+                if day == today:
+                    classes.append("today")
+                day_items = events_by_day.get(day, []) if day.month == month else []
+                html_parts.append(f'<div class="{" ".join(classes)}">')
+                html_parts.append(f'<div class="day-number">{day.day}</div>')
+                if day_items:
+                    html_parts.append('<div class="day-items">')
+                    for item in day_items[:2]:
+                        label = safe_text(item.get("titulo")) or safe_text(item.get("descripcion")) or safe_text(item.get("tipo"))
+                        if safe_text(item.get("hora")):
+                            label = f"{safe_text(item.get('hora'))} · {label}"
+                        color = event_color(item.get("tipo", ""), item.get("origen", ""), item.get("estado", ""))
+                        html_parts.append(f'<div class="day-item" style="background:{color};" title="{html.escape(label)}">{html.escape(label)}</div>')
+                    if len(day_items) > 2:
+                        html_parts.append(f'<div class="more-items">+{len(day_items) - 2} más</div>')
+                    html_parts.append('</div>')
+                html_parts.append('</div>')
+        html_parts.append('</div></div>')
+    html_parts.append('</div>')
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+    st.markdown("### Detalle")
+    if agenda.empty:
+        st.info("No hay detalle para mostrar.")
     else:
         agenda_display = agenda.copy()
         agenda_display["Fecha"] = agenda_display["fecha_dt"].dt.strftime("%Y-%m-%d")
@@ -2130,31 +2309,21 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
             "ubicacion": "Lugar / enlace",
             "fecha_vencimiento": "Fecha de vencimiento",
         })
-        st.markdown("### Agenda")
-        st.dataframe(
-            clean_interface_dataframe(agenda_display[["Fecha", "Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace", "Fecha de vencimiento"]]),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.markdown("### Vista por días")
-        for day, group in agenda_display.groupby("Fecha", sort=True):
-            with st.expander(day, expanded=False):
-                st.dataframe(
-                    clean_interface_dataframe(group[["Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace"]]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            clean_interface_dataframe(agenda_display).drop(columns=["fecha", "fecha_dt"], errors="ignore").to_excel(writer, index=False, sheet_name="Calendario")
-        st.download_button(
-            "Descargar calendario en Excel",
-            buffer.getvalue(),
-            "calendario.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        with st.expander("Ver agenda en tabla", expanded=False):
+            st.dataframe(
+                clean_interface_dataframe(agenda_display[["Fecha", "Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace", "Fecha de vencimiento"]]),
+                use_container_width=True,
+                hide_index=True,
+            )
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                clean_interface_dataframe(agenda_display).drop(columns=["fecha", "fecha_dt"], errors="ignore").to_excel(writer, index=False, sheet_name="Calendario")
+            st.download_button(
+                "Descargar calendario en Excel",
+                buffer.getvalue(),
+                "calendario.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
     st.markdown("### Editar eventos y reuniones")
     if events.empty:
@@ -2187,6 +2356,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                     st.error("Antes de guardar, entra con un perfil identificado.")
                 else:
                     update_calendar_events(engine, edited_events, user_name)
+                    clear_cached_data()
                     st.success("Calendario actualizado.")
                     st.rerun()
         with c2:
@@ -2194,6 +2364,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
             delete_event_id = st.selectbox("Eliminar evento", event_ids, format_func=lambda x: f"Evento {x}", key="delete_calendar_event_select")
             if st.button("Eliminar evento seleccionado"):
                 delete_calendar_event(engine, int(delete_event_id))
+                clear_cached_data()
                 st.success("Evento eliminado.")
                 st.rerun()
 
