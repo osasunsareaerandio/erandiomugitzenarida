@@ -39,6 +39,8 @@ STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
 INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
 TASK_STATUS_OPTIONS = ["No iniciado", "En curso", "Completado", "Descartado"]
+EVENT_TYPE_OPTIONS = ["Evento", "Reunión", "Actividad", "Hito", "Otro"]
+CALENDAR_ITEM_TYPES = ["Todos", "Eventos/Reuniones", "Tareas"]
 QUESTIONNAIRE_TYPES = {"promotora": "Persona Promotora", "participante": "Persona participante"}
 LIKERT_OPTIONS = [1, 2, 3, 4, 5]
 LIKERT_SELECT_OPTIONS = ["Sin marcar", 1, 2, 3, 4, 5]
@@ -336,7 +338,7 @@ def clear_data_caches() -> None:
     """Limpia caches de datos tras guardar cambios para que la interfaz vea datos actualizados."""
     for fn in [
         get_evaluations, get_history, get_action_contacts, get_activity_documents,
-        get_contacts, get_access_log, get_questionnaire_responses, load_contacts_and_assignments
+        get_contacts, get_access_log, get_questionnaire_responses, get_calendar_events, load_contacts_and_assignments
     ]:
         try:
             fn.clear()
@@ -639,6 +641,29 @@ def init_db(_engine: Engine) -> None:
                 sent_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'sent',
                 error_message TEXT
+            )
+            """
+        ))
+        event_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                event_id {event_id_type},
+                title TEXT NOT NULL,
+                event_type TEXT NOT NULL DEFAULT 'Evento',
+                description TEXT,
+                location TEXT,
+                start_date TEXT NOT NULL,
+                start_time TEXT,
+                end_date TEXT,
+                end_time TEXT,
+                id_accion INTEGER,
+                accion_titulo TEXT,
+                responsable TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
             )
             """
         ))
@@ -1863,6 +1888,315 @@ def maybe_send_overdue_task_reminders(engine: Engine, data: pd.DataFrame) -> Non
     sent, errors = send_overdue_task_reminders(engine, data, force=False)
     st.session_state["task_reminder_last_result"] = {"sent": sent, "errors": errors, "checked_at": datetime.now().isoformat(timespec="seconds")}
 
+
+def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.DataFrame:
+    """Construye una tabla de tareas con fecha para mostrar en Calendario."""
+    rows: list[dict[str, Any]] = []
+    try:
+        overrides = get_task_overrides(engine)
+        action_tasks = build_action_task_rows(data, overrides)
+    except Exception:
+        action_tasks = pd.DataFrame()
+    if not action_tasks.empty:
+        for _, row in action_tasks.iterrows():
+            due_date = safe_text(row.get("Fecha de vencimiento"))
+            request_date = safe_text(row.get("Fecha de petición"))
+            date_value = due_date or request_date
+            if not date_value:
+                continue
+            rows.append({
+                "fecha": date_value,
+                "hora": "",
+                "tipo": "Tarea",
+                "origen": "Ficha de evaluación",
+                "titulo": safe_text(row.get("Id_acción + Título")),
+                "descripcion": safe_text(row.get("Próximos pasos")),
+                "responsable": safe_text(row.get("Responsable de seguimiento")),
+                "estado": safe_text(row.get("Estado")) or "No iniciado",
+                "ubicacion": "",
+                "fecha_vencimiento": due_date,
+            })
+    try:
+        manual_tasks = get_manual_tasks(engine)
+    except Exception:
+        manual_tasks = pd.DataFrame()
+    if not manual_tasks.empty:
+        for _, row in manual_tasks.iterrows():
+            due_date = safe_text(row.get("fecha_vencimiento"))
+            request_date = safe_text(row.get("fecha_peticion"))
+            date_value = due_date or request_date
+            if not date_value:
+                continue
+            id_accion = safe_text(row.get("id_accion"))
+            accion = safe_text(row.get("accion_titulo"))
+            if id_accion and id_accion not in {"0", "0.0"}:
+                try:
+                    title = f"{int(float(id_accion)):03d} - {accion}"
+                except Exception:
+                    title = accion or "Tarea manual"
+            else:
+                title = "Tarea manual"
+            task_text = safe_text(row.get("proximos_pasos")) or safe_text(row.get("descripcion")) or "Tarea manual"
+            rows.append({
+                "fecha": date_value,
+                "hora": "",
+                "tipo": "Tarea",
+                "origen": "Manual",
+                "titulo": title,
+                "descripcion": task_text,
+                "responsable": safe_text(row.get("responsable_seguimiento")),
+                "estado": safe_text(row.get("estado")) or "No iniciado",
+                "ubicacion": "",
+                "fecha_vencimiento": due_date,
+            })
+    df = pd.DataFrame(rows, columns=["fecha", "hora", "tipo", "origen", "titulo", "descripcion", "responsable", "estado", "ubicacion", "fecha_vencimiento"])
+    if not df.empty:
+        df["fecha_dt"] = pd.to_datetime(df["fecha"], errors="coerce")
+        df = df.dropna(subset=["fecha_dt"]).sort_values(["fecha_dt", "hora", "titulo"])
+    return clean_interface_dataframe(df)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_calendar_events(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM calendar_events ORDER BY start_date ASC, start_time ASC, event_id ASC"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "event_id", "title", "event_type", "description", "location", "start_date", "start_time",
+            "end_date", "end_time", "id_accion", "accion_titulo", "responsable", "created_by", "created_at", "updated_by", "updated_at",
+        ])
+    df["event_id"] = df["event_id"].astype(int)
+    return clean_interface_dataframe(df)
+
+
+def add_calendar_event(engine: Engine, payload: dict[str, Any], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = {**payload, "created_by": user_name, "created_at": now, "updated_by": user_name, "updated_at": now}
+    fields = list(payload.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO calendar_events ({", ".join(fields)})
+                VALUES ({", ".join([":" + f for f in fields])})
+            """),
+            payload,
+        )
+    clear_data_caches()
+
+
+def update_calendar_events(engine: Engine, edited: pd.DataFrame, user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        for _, row in edited.iterrows():
+            event_id = int(row["event_id"])
+            conn.execute(
+                text("""
+                    UPDATE calendar_events SET
+                        title = :title,
+                        event_type = :event_type,
+                        description = :description,
+                        location = :location,
+                        start_date = :start_date,
+                        start_time = :start_time,
+                        end_date = :end_date,
+                        end_time = :end_time,
+                        responsable = :responsable,
+                        updated_by = :updated_by,
+                        updated_at = :updated_at
+                    WHERE event_id = :event_id
+                """),
+                {
+                    "event_id": event_id,
+                    "title": safe_text(row.get("title")) or "Sin título",
+                    "event_type": safe_text(row.get("event_type")) or "Evento",
+                    "description": safe_text(row.get("description")),
+                    "location": safe_text(row.get("location")),
+                    "start_date": safe_text(row.get("start_date")),
+                    "start_time": safe_text(row.get("start_time")),
+                    "end_date": safe_text(row.get("end_date")),
+                    "end_time": safe_text(row.get("end_time")),
+                    "responsable": safe_text(row.get("responsable")),
+                    "updated_by": user_name,
+                    "updated_at": now,
+                },
+            )
+    clear_data_caches()
+
+
+def delete_calendar_event(engine: Engine, event_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM calendar_events WHERE event_id = :event_id"), {"event_id": int(event_id)})
+    clear_data_caches()
+
+
+def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
+    st.subheader("Calendario")
+    st.caption("Agenda conjunta de eventos, reuniones, hitos y tareas programadas.")
+
+    events = get_calendar_events(engine)
+    task_calendar = combine_task_rows_for_calendar(data, engine)
+
+    with st.expander("Añadir evento o reunión", expanded=False):
+        action_options = ["Sin acción asociada"] + data.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
+        with st.form("calendar_event_form", clear_on_submit=True):
+            title = st.text_input("Título del evento o reunión")
+            event_type = st.selectbox("Tipo", EVENT_TYPE_OPTIONS)
+            selected_action = st.selectbox("Acción asociada", action_options)
+            description = st.text_area("Descripción")
+            location = st.text_input("Lugar / enlace de reunión")
+            c1, c2, c3, c4 = st.columns(4)
+            start_date = c1.date_input("Fecha de inicio", value=date.today())
+            start_time = c2.text_input("Hora de inicio", placeholder="09:30")
+            end_date = c3.date_input("Fecha de fin", value=date.today())
+            end_time = c4.text_input("Hora de fin", placeholder="10:30")
+            responsable = st.text_input("Responsable")
+            submitted = st.form_submit_button("Añadir al calendario")
+        if submitted:
+            if not user_name:
+                st.error("Antes de añadir un evento, entra con un perfil identificado.")
+            elif not safe_text(title):
+                st.error("El título es obligatorio.")
+            else:
+                id_accion = None
+                accion_titulo = ""
+                if selected_action != "Sin acción asociada":
+                    id_accion = int(selected_action.split(" - ")[0])
+                    accion_titulo = selected_action.split(" - ", 1)[1]
+                add_calendar_event(engine, {
+                    "title": title,
+                    "event_type": event_type,
+                    "description": description,
+                    "location": location,
+                    "start_date": start_date.isoformat(),
+                    "start_time": start_time,
+                    "end_date": end_date.isoformat(),
+                    "end_time": end_time,
+                    "id_accion": id_accion,
+                    "accion_titulo": accion_titulo,
+                    "responsable": responsable,
+                }, user_name)
+                st.success("Evento añadido al calendario.")
+                st.rerun()
+
+    today = date.today()
+    c1, c2, c3 = st.columns(3)
+    start_filter = c1.date_input("Desde", value=today.replace(day=1), key="calendar_start_filter")
+    end_filter = c2.date_input("Hasta", value=today, key="calendar_end_filter")
+    item_filter = c3.selectbox("Mostrar", CALENDAR_ITEM_TYPES, key="calendar_type_filter")
+    search = st.text_input("Buscar en calendario", placeholder="Título, descripción, responsable, lugar...")
+
+    agenda_rows: list[dict[str, Any]] = []
+    if item_filter in {"Todos", "Eventos/Reuniones"} and not events.empty:
+        for _, row in events.iterrows():
+            agenda_rows.append({
+                "fecha": safe_text(row.get("start_date")),
+                "hora": safe_text(row.get("start_time")),
+                "tipo": safe_text(row.get("event_type")) or "Evento",
+                "origen": "Calendario",
+                "titulo": safe_text(row.get("title")),
+                "descripcion": safe_text(row.get("description")),
+                "responsable": safe_text(row.get("responsable")),
+                "estado": "",
+                "ubicacion": safe_text(row.get("location")),
+                "fecha_vencimiento": "",
+            })
+    if item_filter in {"Todos", "Tareas"} and not task_calendar.empty:
+        agenda_rows.extend(task_calendar.drop(columns=[c for c in ["fecha_dt"] if c in task_calendar.columns]).to_dict("records"))
+
+    agenda = pd.DataFrame(agenda_rows, columns=["fecha", "hora", "tipo", "origen", "titulo", "descripcion", "responsable", "estado", "ubicacion", "fecha_vencimiento"])
+    if not agenda.empty:
+        agenda["fecha_dt"] = pd.to_datetime(agenda["fecha"], errors="coerce")
+        agenda = agenda.dropna(subset=["fecha_dt"])
+        agenda = agenda[(agenda["fecha_dt"].dt.date >= start_filter) & (agenda["fecha_dt"].dt.date <= end_filter)]
+        if search:
+            haystack = agenda[["titulo", "descripcion", "responsable", "ubicacion", "estado"]].fillna("").agg(" ".join, axis=1).str.lower()
+            agenda = agenda[haystack.str.contains(search.lower(), regex=False)]
+        agenda = agenda.sort_values(["fecha_dt", "hora", "tipo", "titulo"])
+
+    if agenda.empty:
+        st.info("No hay eventos ni tareas para los filtros seleccionados.")
+    else:
+        agenda_display = agenda.copy()
+        agenda_display["Fecha"] = agenda_display["fecha_dt"].dt.strftime("%Y-%m-%d")
+        agenda_display = agenda_display.rename(columns={
+            "hora": "Hora",
+            "tipo": "Tipo",
+            "origen": "Origen",
+            "titulo": "Título / actividad",
+            "descripcion": "Descripción / próximos pasos",
+            "responsable": "Responsable",
+            "estado": "Estado",
+            "ubicacion": "Lugar / enlace",
+            "fecha_vencimiento": "Fecha de vencimiento",
+        })
+        st.markdown("### Agenda")
+        st.dataframe(
+            clean_interface_dataframe(agenda_display[["Fecha", "Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace", "Fecha de vencimiento"]]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown("### Vista por días")
+        for day, group in agenda_display.groupby("Fecha", sort=True):
+            with st.expander(day, expanded=False):
+                st.dataframe(
+                    clean_interface_dataframe(group[["Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace"]]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            clean_interface_dataframe(agenda_display).drop(columns=["fecha", "fecha_dt"], errors="ignore").to_excel(writer, index=False, sheet_name="Calendario")
+        st.download_button(
+            "Descargar calendario en Excel",
+            buffer.getvalue(),
+            "calendario.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    st.markdown("### Editar eventos y reuniones")
+    if events.empty:
+        st.info("Todavía no hay eventos o reuniones añadidos manualmente.")
+    else:
+        edit_cols = ["event_id", "title", "event_type", "description", "location", "start_date", "start_time", "end_date", "end_time", "responsable"]
+        edited_events = st.data_editor(
+            events[edit_cols],
+            use_container_width=True,
+            hide_index=True,
+            disabled=["event_id"],
+            column_config={
+                "event_id": None,
+                "title": st.column_config.TextColumn("Título", width="large"),
+                "event_type": st.column_config.SelectboxColumn("Tipo", options=EVENT_TYPE_OPTIONS, required=True),
+                "description": st.column_config.TextColumn("Descripción", width="large"),
+                "location": st.column_config.TextColumn("Lugar / enlace", width="medium"),
+                "start_date": st.column_config.TextColumn("Fecha inicio", help="Formato AAAA-MM-DD"),
+                "start_time": st.column_config.TextColumn("Hora inicio"),
+                "end_date": st.column_config.TextColumn("Fecha fin", help="Formato AAAA-MM-DD"),
+                "end_time": st.column_config.TextColumn("Hora fin"),
+                "responsable": st.column_config.TextColumn("Responsable", width="medium"),
+            },
+            key="calendar_events_editor",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Guardar cambios en calendario"):
+                if not user_name:
+                    st.error("Antes de guardar, entra con un perfil identificado.")
+                else:
+                    update_calendar_events(engine, edited_events, user_name)
+                    st.success("Calendario actualizado.")
+                    st.rerun()
+        with c2:
+            event_ids = events["event_id"].astype(int).tolist()
+            delete_event_id = st.selectbox("Eliminar evento", event_ids, format_func=lambda x: f"Evento {x}", key="delete_calendar_event_select")
+            if st.button("Eliminar evento seleccionado"):
+                delete_calendar_event(engine, int(delete_event_id))
+                st.success("Evento eliminado.")
+                st.rerun()
+
 def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Tareas")
     st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de evaluación y tareas añadidas manualmente.")
@@ -2831,9 +3165,9 @@ def main() -> None:
     filtered = filter_dataframe(data)
 
     if st.session_state.get("role") == "admin":
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Red Local de Salud", "Evolución", "Administración"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
@@ -2853,6 +3187,9 @@ def main() -> None:
 
     elif selected_page == "Tareas":
         render_tasks(data, user_name, engine)
+
+    elif selected_page == "Calendario":
+        render_calendar(data, user_name, engine)
 
     elif selected_page == "Red Local de Salud":
         with st.spinner("Cargando Red Local de Salud..."):
