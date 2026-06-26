@@ -95,6 +95,18 @@ PROFILE_CONFIG = {
         "role": "eje",
         "scope": "Bienestar emocional",
     },
+    "Dirección": {
+        "secret": "PASSWORD_DIRECCION",
+        "default_password": "Direccion2026!",
+        "role": "direccion",
+        "scope": None,
+    },
+    "Evaluación": {
+        "secret": "PASSWORD_EVALUACION",
+        "default_password": "Evaluacion2026!",
+        "role": "evaluacion",
+        "scope": None,
+    },
 }
 
 
@@ -606,6 +618,7 @@ def init_db(_engine: Engine) -> None:
                 proximos_pasos TEXT,
                 descripcion TEXT,
                 responsable_seguimiento TEXT,
+                contacto_id INTEGER,
                 fecha_peticion TEXT,
                 fecha_vencimiento TEXT,
                 estado TEXT NOT NULL DEFAULT 'No iniciado',
@@ -621,6 +634,7 @@ def init_db(_engine: Engine) -> None:
             CREATE TABLE IF NOT EXISTS task_overrides (
                 task_key TEXT PRIMARY KEY,
                 descripcion TEXT,
+                contacto_id INTEGER,
                 fecha_vencimiento TEXT,
                 estado TEXT NOT NULL DEFAULT 'No iniciado',
                 updated_by TEXT,
@@ -708,6 +722,16 @@ def init_db(_engine: Engine) -> None:
     }
     for table_name in ["evaluations", "evaluation_history"]:
         for column_name, column_type in evaluation_extra_columns.items():
+            if not column_exists(engine, table_name, column_name):
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
+
+    task_extra_columns = {
+        "manual_tasks": {"contacto_id": "INTEGER"},
+        "task_overrides": {"contacto_id": "INTEGER"},
+    }
+    for table_name, columns in task_extra_columns.items():
+        for column_name, column_type in columns.items():
             if not column_exists(engine, table_name, column_name):
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"))
@@ -1458,10 +1482,13 @@ def get_manual_tasks(_engine: Engine) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=[
             "task_id", "id_accion", "accion_titulo", "proximos_pasos", "descripcion", "responsable_seguimiento",
-            "fecha_peticion", "fecha_vencimiento", "estado", "created_by", "created_at", "updated_by", "updated_at",
+            "fecha_peticion", "fecha_vencimiento", "estado", "contacto_id", "created_by", "created_at", "updated_by", "updated_at",
         ])
     df["task_id"] = df["task_id"].astype(int)
     df["id_accion"] = pd.to_numeric(df.get("id_accion"), errors="coerce")
+    if "contacto_id" not in df.columns:
+        df["contacto_id"] = None
+    df["contacto_id"] = pd.to_numeric(df.get("contacto_id"), errors="coerce")
     return clean_interface_dataframe(df)
 
 
@@ -1471,7 +1498,10 @@ def get_task_overrides(_engine: Engine) -> pd.DataFrame:
     with engine.begin() as conn:
         df = pd.read_sql_query(text("SELECT * FROM task_overrides"), conn)
     if df.empty:
-        return pd.DataFrame(columns=["task_key", "descripcion", "fecha_vencimiento", "estado", "updated_by", "updated_at"])
+        return pd.DataFrame(columns=["task_key", "descripcion", "fecha_vencimiento", "estado", "contacto_id", "updated_by", "updated_at"])
+    if "contacto_id" not in df.columns:
+        df["contacto_id"] = None
+    df["contacto_id"] = pd.to_numeric(df.get("contacto_id"), errors="coerce")
     return clean_interface_dataframe(df)
 
 
@@ -1489,28 +1519,31 @@ def save_task_overrides(engine: Engine, tasks_df: pd.DataFrame, user_name: str) 
                 "descripcion": safe_text(row.get("Descripción")),
                 "fecha_vencimiento": safe_text(row.get("Fecha de vencimiento")),
                 "estado": safe_text(row.get("Estado")) or "No iniciado",
+                "contacto_id": parse_contact_id_from_label(row.get("Contacto RLS")) or parse_optional_int(row.get("contacto_id")),
                 "updated_by": user_name,
                 "updated_at": now,
             }
             if is_postgres(engine):
                 conn.execute(text("""
-                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, updated_by, updated_at)
-                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :updated_by, :updated_at)
+                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, contacto_id, updated_by, updated_at)
+                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :contacto_id, :updated_by, :updated_at)
                     ON CONFLICT(task_key) DO UPDATE SET
                         descripcion = excluded.descripcion,
                         fecha_vencimiento = excluded.fecha_vencimiento,
                         estado = excluded.estado,
+                        contacto_id = excluded.contacto_id,
                         updated_by = excluded.updated_by,
                         updated_at = excluded.updated_at
                 """), payload)
             else:
                 conn.execute(text("""
-                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, updated_by, updated_at)
-                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :updated_by, :updated_at)
+                    INSERT INTO task_overrides (task_key, descripcion, fecha_vencimiento, estado, contacto_id, updated_by, updated_at)
+                    VALUES (:task_key, :descripcion, :fecha_vencimiento, :estado, :contacto_id, :updated_by, :updated_at)
                     ON CONFLICT(task_key) DO UPDATE SET
                         descripcion = excluded.descripcion,
                         fecha_vencimiento = excluded.fecha_vencimiento,
                         estado = excluded.estado,
+                        contacto_id = excluded.contacto_id,
                         updated_by = excluded.updated_by,
                         updated_at = excluded.updated_at
                 """), payload)
@@ -1525,6 +1558,7 @@ def add_manual_task(engine: Engine, payload: dict[str, Any], user_name: str) -> 
         "proximos_pasos": safe_text(payload.get("proximos_pasos")),
         "descripcion": safe_text(payload.get("descripcion")),
         "responsable_seguimiento": safe_text(payload.get("responsable_seguimiento")),
+        "contacto_id": payload.get("contacto_id"),
         "fecha_peticion": safe_text(payload.get("fecha_peticion")),
         "fecha_vencimiento": safe_text(payload.get("fecha_vencimiento")),
         "estado": safe_text(payload.get("estado")) or "No iniciado",
@@ -1564,6 +1598,7 @@ def update_manual_tasks(engine: Engine, tasks_df: pd.DataFrame, user_name: str) 
                 "proximos_pasos": safe_text(row.get("proximos_pasos")),
                 "descripcion": safe_text(row.get("descripcion")),
                 "responsable_seguimiento": safe_text(row.get("responsable_seguimiento")),
+                "contacto_id": parse_contact_id_from_label(row.get("Contacto RLS")) or parse_optional_int(row.get("contacto_id")),
                 "fecha_peticion": safe_text(row.get("fecha_peticion")),
                 "fecha_vencimiento": safe_text(row.get("fecha_vencimiento")),
                 "estado": safe_text(row.get("estado")) or "No iniciado",
@@ -1577,6 +1612,7 @@ def update_manual_tasks(engine: Engine, tasks_df: pd.DataFrame, user_name: str) 
                     proximos_pasos = :proximos_pasos,
                     descripcion = :descripcion,
                     responsable_seguimiento = :responsable_seguimiento,
+                    contacto_id = :contacto_id,
                     fecha_peticion = :fecha_peticion,
                     fecha_vencimiento = :fecha_vencimiento,
                     estado = :estado,
@@ -1597,7 +1633,7 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
     if data.empty:
         return pd.DataFrame(columns=[
             "task_key", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento",
-            "Fecha de petición", "Fecha de vencimiento", "Estado",
+            "contacto_id", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado",
         ])
     rows = []
     overrides_by_key = {}
@@ -1617,6 +1653,8 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
             "Próximos pasos": next_steps,
             "Descripción": safe_text(override.get("descripcion")) if override is not None else "",
             "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
+            "contacto_id": parse_optional_int(override.get("contacto_id")) if override is not None else None,
+            "Contacto RLS": "",
             "Fecha de petición": default_request_date[:10],
             "Fecha de vencimiento": safe_text(override.get("fecha_vencimiento")) if override is not None else "",
             "Estado": safe_text(override.get("estado")) if override is not None else "No iniciado",
@@ -1625,7 +1663,7 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
     if df.empty:
         return pd.DataFrame(columns=[
             "task_key", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento",
-            "Fecha de petición", "Fecha de vencimiento", "Estado",
+            "contacto_id", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado",
         ])
     df["Estado"] = df["Estado"].apply(lambda x: x if x in TASK_STATUS_OPTIONS else "No iniciado")
     return clean_interface_dataframe(df)
@@ -1649,6 +1687,75 @@ def parse_iso_date(value: Any) -> date | None:
         pass
     return None
 
+
+
+def parse_optional_int(value: Any) -> int | None:
+    try:
+        if value is None or pd.isna(value):
+            return None
+    except Exception:
+        pass
+    raw = safe_text(value)
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except Exception:
+        return None
+
+
+def parse_contact_id_from_label(value: Any) -> int | None:
+    raw = safe_text(value)
+    if not raw:
+        return None
+    match = re.match(r"^(\d+)\s+-\s+", raw)
+    if match:
+        return int(match.group(1))
+    return parse_optional_int(raw)
+
+
+def build_contact_option_map(contacts: pd.DataFrame) -> tuple[list[str], dict[int, str], dict[int, str]]:
+    options = [""]
+    labels_by_id: dict[int, str] = {}
+    mails_by_id: dict[int, str] = {}
+    if contacts is None or contacts.empty:
+        return options, labels_by_id, mails_by_id
+    for _, row in contacts.iterrows():
+        contact_id = parse_optional_int(row.get("contacto_id"))
+        if not contact_id:
+            continue
+        persona = safe_text(row.get("Persona")) or safe_text(row.get("persona")) or "Sin nombre"
+        entidad = safe_text(row.get("Entidad")) or safe_text(row.get("entidad"))
+        mail = safe_text(row.get("Mail")) or safe_text(row.get("mail")) or safe_text(row.get("email"))
+        label_parts = [f"{contact_id} - {persona}"]
+        if entidad:
+            label_parts.append(f"({entidad})")
+        if mail:
+            label_parts.append(f"<{mail}>")
+        label = " ".join(label_parts)
+        options.append(label)
+        labels_by_id[contact_id] = label
+        mails_by_id[contact_id] = mail
+    return options, labels_by_id, mails_by_id
+
+
+def apply_contact_labels_to_tasks(tasks_df: pd.DataFrame, contacts: pd.DataFrame) -> pd.DataFrame:
+    if tasks_df.empty:
+        return tasks_df
+    _, labels_by_id, _ = build_contact_option_map(contacts)
+    result = tasks_df.copy()
+    if "contacto_id" not in result.columns:
+        result["contacto_id"] = None
+    result["Contacto RLS"] = result["contacto_id"].apply(lambda value: labels_by_id.get(parse_optional_int(value), ""))
+    return result
+
+
+def contact_mail_from_id(contact_id: Any, contacts: pd.DataFrame) -> str:
+    cid = parse_optional_int(contact_id)
+    if not cid or contacts is None or contacts.empty:
+        return ""
+    _, _, mails_by_id = build_contact_option_map(contacts)
+    return mails_by_id.get(cid, "")
 
 def get_task_mail_config() -> dict[str, Any]:
     """SMTP configuration for overdue-task reminders.
@@ -1742,10 +1849,15 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
     """Return overdue, active tasks from both derived and manual task sources."""
     today = date.today()
     candidates: list[dict[str, Any]] = []
+    try:
+        contacts_for_mail = get_contacts(engine)
+    except Exception:
+        contacts_for_mail = pd.DataFrame()
 
     try:
         overrides = get_task_overrides(engine)
         action_tasks = build_action_task_rows(data, overrides)
+        action_tasks = apply_contact_labels_to_tasks(action_tasks, contacts_for_mail)
     except Exception:
         action_tasks = pd.DataFrame()
 
@@ -1773,12 +1885,16 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
                 "proximos_pasos": safe_text(row.get("Próximos pasos")),
                 "descripcion": safe_text(row.get("Descripción")),
                 "responsable_seguimiento": safe_text(row.get("Responsable de seguimiento")),
+                "contacto_id": parse_optional_int(row.get("contacto_id")),
+                "contacto_rls": safe_text(row.get("Contacto RLS")),
+                "contacto_mail": contact_mail_from_id(row.get("contacto_id"), contacts_for_mail),
                 "fecha_vencimiento": due_date.isoformat(),
                 "estado": status,
             })
 
     try:
         manual_tasks = get_manual_tasks(engine)
+        manual_tasks = apply_contact_labels_to_tasks(manual_tasks, contacts_for_mail)
     except Exception:
         manual_tasks = pd.DataFrame()
     if not manual_tasks.empty:
@@ -1810,6 +1926,9 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
                 "proximos_pasos": safe_text(row.get("proximos_pasos")),
                 "descripcion": safe_text(row.get("descripcion")),
                 "responsable_seguimiento": safe_text(row.get("responsable_seguimiento")),
+                "contacto_id": parse_optional_int(row.get("contacto_id")),
+                "contacto_rls": safe_text(row.get("Contacto RLS")),
+                "contacto_mail": contact_mail_from_id(row.get("contacto_id"), contacts_for_mail),
                 "fecha_vencimiento": due_date.isoformat(),
                 "estado": status,
             })
@@ -1831,12 +1950,16 @@ def send_overdue_task_reminders(engine: Engine, data: pd.DataFrame, force: bool 
 
     already_sent = get_sent_task_reminder_keys(engine)
     candidates = build_overdue_task_candidates(data, engine)
-    to_send = [item for item in candidates if force or item["reminder_key"] not in already_sent]
+    to_send = candidates
     sent_count = 0
     errors: list[str] = []
-    recipient = cfg["recipient"]
+    default_recipient = cfg["recipient"]
     now = datetime.now().isoformat(timespec="seconds")
     for task in to_send:
+        recipients = [default_recipient]
+        contact_mail = safe_text(task.get("contacto_mail"))
+        if contact_mail and contact_mail not in recipients:
+            recipients.append(contact_mail)
         subject = f"Tarea vencida: {task['accion_titulo']}"
         body = "\n".join([
             "Se ha detectado una tarea vencida en la herramienta Erandio Mugitzen ari da!.",
@@ -1846,37 +1969,42 @@ def send_overdue_task_reminders(engine: Engine, data: pd.DataFrame, force: bool 
             f"Próximos pasos: {task['proximos_pasos'] or '-'}",
             f"Descripción: {task['descripcion'] or '-'}",
             f"Responsable de seguimiento: {task['responsable_seguimiento'] or '-'}",
+            f"Contacto RLS asociado: {task.get('contacto_rls') or '-'}",
             f"Fecha de vencimiento: {task['fecha_vencimiento']}",
             f"Estado: {task['estado']}",
             "",
             "Revisa la pestaña Tareas para actualizar el estado o la fecha de vencimiento.",
         ])
-        record_payload = {
-            "reminder_key": task["reminder_key"],
-            "task_source": task["task_source"],
-            "task_identifier": safe_text(task["task_identifier"]),
-            "id_accion": task.get("id_accion"),
-            "accion_titulo": task["accion_titulo"],
-            "proximos_pasos": task["proximos_pasos"],
-            "responsable_seguimiento": task["responsable_seguimiento"],
-            "fecha_vencimiento": task["fecha_vencimiento"],
-            "recipient": recipient,
-            "sent_at": now,
-            "status": "sent",
-            "error_message": "",
-        }
-        try:
-            send_task_email(subject, body, recipient)
-            record_task_reminder(engine, record_payload)
-            sent_count += 1
-        except Exception as exc:
-            record_payload["status"] = "error"
-            record_payload["error_message"] = safe_text(exc)[:500]
+        for recipient in recipients:
+            recipient_key = f"{task['reminder_key']}:{recipient}"
+            if not force and recipient_key in already_sent:
+                continue
+            record_payload = {
+                "reminder_key": recipient_key,
+                "task_source": task["task_source"],
+                "task_identifier": safe_text(task["task_identifier"]),
+                "id_accion": task.get("id_accion"),
+                "accion_titulo": task["accion_titulo"],
+                "proximos_pasos": task["proximos_pasos"],
+                "responsable_seguimiento": task["responsable_seguimiento"],
+                "fecha_vencimiento": task["fecha_vencimiento"],
+                "recipient": recipient,
+                "sent_at": now,
+                "status": "sent",
+                "error_message": "",
+            }
             try:
+                send_task_email(subject, body, recipient)
                 record_task_reminder(engine, record_payload)
-            except Exception:
-                pass
-            errors.append(f"{task['accion_titulo']}: {exc}")
+                sent_count += 1
+            except Exception as exc:
+                record_payload["status"] = "error"
+                record_payload["error_message"] = safe_text(exc)[:500]
+                try:
+                    record_task_reminder(engine, record_payload)
+                except Exception:
+                    pass
+                errors.append(f"{task['accion_titulo']} → {recipient}: {exc}")
     clear_data_caches()
     return sent_count, errors
 
@@ -1920,6 +2048,7 @@ def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.Dat
             })
     try:
         manual_tasks = get_manual_tasks(engine)
+        manual_tasks = apply_contact_labels_to_tasks(manual_tasks, contacts_for_mail)
     except Exception:
         manual_tasks = pd.DataFrame()
     if not manual_tasks.empty:
@@ -2411,8 +2540,10 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Tareas")
     st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de evaluación y tareas añadidas manualmente.")
 
+    contacts = get_contacts(engine)
+    contact_options, _, _ = build_contact_option_map(contacts)
     overrides = get_task_overrides(engine)
-    action_tasks = build_action_task_rows(data, overrides)
+    action_tasks = apply_contact_labels_to_tasks(build_action_task_rows(data, overrides), contacts)
 
     st.markdown("### Tareas generadas desde Próximos pasos")
     st.caption("Se nutren automáticamente del campo Próximos pasos de cada Ficha de evaluación. Puedes completar descripción, vencimiento y estado.")
@@ -2423,13 +2554,15 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
             action_tasks,
             use_container_width=True,
             hide_index=True,
-            disabled=["task_key", "Id_acción + Título", "Próximos pasos", "Responsable de seguimiento", "Fecha de petición"],
+            disabled=["task_key", "contacto_id", "Id_acción + Título", "Próximos pasos", "Responsable de seguimiento", "Fecha de petición"],
             column_config={
                 "task_key": None,
                 "Id_acción + Título": st.column_config.TextColumn("Id_acción + Título", width="large"),
                 "Próximos pasos": st.column_config.TextColumn("Próximos pasos", width="large"),
                 "Descripción": st.column_config.TextColumn("Descripción", width="large"),
                 "Responsable de seguimiento": st.column_config.TextColumn("Responsable de seguimiento", width="medium"),
+                "contacto_id": None,
+                "Contacto RLS": st.column_config.SelectboxColumn("Contacto RLS", options=contact_options, width="large", help="Persona de la Red Local de Salud asociada a esta tarea. Si tiene email, recibirá el aviso de vencimiento."),
                 "Fecha de petición": st.column_config.TextColumn("Fecha de petición", width="small"),
                 "Fecha de vencimiento": st.column_config.TextColumn("Fecha de vencimiento", help="Formato recomendado: AAAA-MM-DD", width="small"),
                 "Estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
@@ -2453,7 +2586,9 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
             manual_description = st.text_area("Descripción")
             c1, c2 = st.columns(2)
             manual_responsible = c1.text_input("Responsable de seguimiento")
-            manual_request_date = c2.date_input("Fecha de petición", value=date.today())
+            manual_contact_label = c2.selectbox("Contacto RLS asociado", contact_options)
+            c_req, c_due = st.columns(2)
+            manual_request_date = c_req.date_input("Fecha de petición", value=date.today())
             c3, c4 = st.columns(2)
             manual_due_date = c3.date_input("Fecha de vencimiento", value=date.today())
             manual_status = c4.selectbox("Estado", TASK_STATUS_OPTIONS)
@@ -2475,6 +2610,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                     "proximos_pasos": manual_next_steps,
                     "descripcion": manual_description,
                     "responsable_seguimiento": manual_responsible,
+                    "contacto_id": parse_contact_id_from_label(manual_contact_label),
                     "fecha_peticion": manual_request_date.isoformat(),
                     "fecha_vencimiento": manual_due_date.isoformat(),
                     "estado": manual_status,
@@ -2482,7 +2618,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                 st.success("Tarea manual añadida.")
                 st.rerun()
 
-    manual_tasks = get_manual_tasks(engine)
+    manual_tasks = apply_contact_labels_to_tasks(get_manual_tasks(engine), contacts)
     if manual_tasks.empty:
         st.info("Todavía no hay tareas manuales.")
     else:
@@ -2493,13 +2629,13 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         )
         editor_cols = [
             "task_id", "id_accion", "accion_titulo", "Id_acción + Título", "proximos_pasos", "descripcion",
-            "responsable_seguimiento", "fecha_peticion", "fecha_vencimiento", "estado",
+            "responsable_seguimiento", "contacto_id", "Contacto RLS", "fecha_peticion", "fecha_vencimiento", "estado",
         ]
         edited_manual = st.data_editor(
             visible_manual[editor_cols],
             use_container_width=True,
             hide_index=True,
-            disabled=["task_id", "id_accion", "accion_titulo", "Id_acción + Título"],
+            disabled=["task_id", "id_accion", "accion_titulo", "contacto_id", "Id_acción + Título"],
             column_config={
                 "task_id": None,
                 "id_accion": None,
@@ -2508,6 +2644,8 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                 "proximos_pasos": st.column_config.TextColumn("Próximos pasos", width="large"),
                 "descripcion": st.column_config.TextColumn("Descripción", width="large"),
                 "responsable_seguimiento": st.column_config.TextColumn("Responsable de seguimiento", width="medium"),
+                "contacto_id": None,
+                "Contacto RLS": st.column_config.SelectboxColumn("Contacto RLS", options=contact_options, width="large", help="Persona de la Red Local de Salud asociada a esta tarea. Si tiene email, recibirá el aviso de vencimiento."),
                 "fecha_peticion": st.column_config.TextColumn("Fecha de petición", width="small"),
                 "fecha_vencimiento": st.column_config.TextColumn("Fecha de vencimiento", help="Formato recomendado: AAAA-MM-DD", width="small"),
                 "estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
@@ -2542,7 +2680,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if not action_tasks.empty:
         derived = action_tasks.copy()
         derived["Origen"] = "Ficha de evaluación"
-        combined.append(derived[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
+        combined.append(derived[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
     if not manual_tasks.empty:
         manual_export = visible_manual.rename(columns={
             "proximos_pasos": "Próximos pasos",
@@ -2553,7 +2691,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
             "estado": "Estado",
         }).copy()
         manual_export["Origen"] = "Manual"
-        combined.append(manual_export[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
+        combined.append(manual_export[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
     if combined:
         export_df = pd.concat(combined, ignore_index=True)
         buffer = io.BytesIO()
@@ -2844,152 +2982,18 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     )
 
 def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataFrame) -> None:
-    st.subheader("Registro de modificaciones")
-    st.caption("Tabla simplificada con quién modificó cada acción, cuándo lo hizo y qué campos cambió.")
+    """Pestaña de evolución simplificada sin mostrar modificaciones registradas.
 
-    if history.empty:
-        st.info("Todavía no hay modificaciones registradas. Cada vez que guardes una ficha de evaluación se añadirá una línea aquí.")
-        return
-
-    meta_columns = ["id_accion", "Ámbito", "Título", "Tipo", "Estado"]
-    history_meta = history.merge(all_data[meta_columns], on="id_accion", how="left")
-    history_meta = history_meta[history_meta["id_accion"].isin(set(df["id_accion"].astype(int)))].copy()
-    if history_meta.empty:
-        st.info("No hay modificaciones para los filtros seleccionados.")
-        return
-
-    def parse_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        return str(value).strip().lower() in {"true", "1", "sí", "si", "yes", "y"}
-
-    def display_value(field: str, value: Any) -> str:
-        if value is None:
-            return ""
-        try:
-            if pd.isna(value):
-                return ""
-        except Exception:
-            pass
-        if field in ["link_promotora_enviado", "link_participante_enviado"]:
-            return "Sí" if parse_bool(value) else "No"
-        text_value = safe_text(value)
-        if len(text_value) > 160:
-            return text_value[:157] + "..."
-        return text_value
-
-    tracked_fields = [
-        ("estado_evaluacion", "Estado de evaluación"),
-        ("cumplimiento_indicadores", "Cumplimiento de indicadores"),
-        ("valoracion_tecnica", "Valoración técnica"),
-        ("observaciones", "Observaciones"),
-        ("responsable_seguimiento", "Responsable seguimiento"),
-        ("fecha_actualizacion", "Fecha de evaluación"),
-        ("evidencias", "Evidencias / enlaces"),
-        ("riesgos", "Riesgos / bloqueos"),
-        ("proximos_pasos", "Próximos pasos"),
-        ("prioridad", "Prioridad"),
-        ("link_promotora", "Link Persona Promotora"),
-        ("link_promotora_enviado", "Check envío Persona Promotora"),
-        ("link_promotora_fecha", "Fecha envío Persona Promotora"),
-        ("link_participante", "Link Persona participante"),
-        ("link_participante_enviado", "Check envío Persona participante"),
-        ("link_participante_fecha", "Fecha envío Persona participante"),
-    ]
-    tracked_fields = [(field, label) for field, label in tracked_fields if field in history_meta.columns]
-
-    sort_cols = [c for c in ["id_accion", "updated_at_dt", "updated_at", "id"] if c in history_meta.columns]
-    history_meta = history_meta.sort_values(sort_cols).copy()
-
-    rows = []
-    for _, group in history_meta.groupby("id_accion", sort=False):
-        previous = None
-        for _, item in group.iterrows():
-            changed_labels = []
-            changed_details = []
-            if previous is None:
-                for field, label in tracked_fields:
-                    value = display_value(field, item.get(field))
-                    if value:
-                        changed_labels.append(label)
-                        changed_details.append(f"{label}: {value}")
-                if not changed_labels:
-                    changed_labels = ["Registro inicial"]
-                    changed_details = ["Registro inicial sin campos informados."]
-            else:
-                for field, label in tracked_fields:
-                    old_value = display_value(field, previous.get(field))
-                    new_value = display_value(field, item.get(field))
-                    if old_value != new_value:
-                        changed_labels.append(label)
-                        changed_details.append(f"{label}: {old_value or 'vacío'} → {new_value or 'vacío'}")
-                if not changed_labels:
-                    changed_labels = ["Guardado sin cambios visibles"]
-                    changed_details = ["Se guardó la ficha, pero no se detectaron cambios en los campos principales."]
-
-            updated_when = item.get("updated_at_dt")
-            if pd.isna(updated_when) if updated_when is not None else True:
-                updated_when = pd.to_datetime(item.get("updated_at"), errors="coerce")
-
-            rows.append({
-                "Cuándo": updated_when,
-                "Quién": safe_text(item.get("updated_by")) or "Sin identificar",
-                "Actividad": safe_text(item.get("Título")) or f"Acción {int(item.get('id_accion'))}",
-                "Ámbito": safe_text(item.get("Ámbito")),
-                "Qué ha modificado": "; ".join(changed_labels),
-                "Detalle del cambio": "\n".join(changed_details),
-            })
-            previous = item
-
-    changes = pd.DataFrame(rows)
-    if changes.empty:
-        st.info("No hay modificaciones para mostrar.")
-        return
-
-    changes = changes.sort_values("Cuándo", ascending=False).copy()
-    changes["Fecha"] = changes["Cuándo"].dt.strftime("%d/%m/%Y %H:%M").fillna("")
-
-    with st.expander("Filtros", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            users = sorted([u for u in changes["Quién"].dropna().unique().tolist() if safe_text(u)])
-            selected_users = st.multiselect("Quién", users, default=users)
-        with col2:
-            scopes = sorted([a for a in changes["Ámbito"].dropna().unique().tolist() if safe_text(a)])
-            selected_scopes = st.multiselect("Ámbito", scopes, default=scopes)
-        with col3:
-            text_filter = st.text_input("Buscar", placeholder="Actividad, campo o detalle...")
-
-    filtered_changes = changes.copy()
-    if selected_users:
-        filtered_changes = filtered_changes[filtered_changes["Quién"].isin(selected_users)]
-    if selected_scopes:
-        filtered_changes = filtered_changes[filtered_changes["Ámbito"].isin(selected_scopes)]
-    if text_filter:
-        haystack = filtered_changes[["Actividad", "Qué ha modificado", "Detalle del cambio", "Quién", "Ámbito"]].fillna("").agg(" ".join, axis=1).str.lower()
-        filtered_changes = filtered_changes[haystack.str.contains(text_filter.lower(), regex=False)]
-
-    st.metric("Modificaciones registradas", len(filtered_changes))
-    st.dataframe(
-        filtered_changes[["Quién", "Actividad", "Fecha", "Qué ha modificado", "Detalle del cambio"]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Actividad": st.column_config.TextColumn("Qué actividad", width="large"),
-            "Detalle del cambio": st.column_config.TextColumn("Qué ha modificado", width="large"),
-            "Fecha": st.column_config.TextColumn("Cuándo", width="medium"),
-        },
-    )
-
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        filtered_changes[["Quién", "Actividad", "Ámbito", "Fecha", "Qué ha modificado", "Detalle del cambio"]].to_excel(writer, index=False, sheet_name="Registro cambios")
-    st.download_button(
-        "Descargar registro de modificaciones",
-        buffer.getvalue(),
-        "registro_modificaciones.xlsx",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    Por decisión de uso, el registro detallado de cambios no se muestra en la
+    interfaz. Las modificaciones siguen guardándose internamente para mantener
+    trazabilidad técnica y copias de seguridad, pero no se listan en pantalla.
+    """
+    st.subheader("Evolución")
+    st.info("El registro detallado de modificaciones se ha ocultado en esta versión.")
+    if history is not None and not history.empty:
+        col1, col2 = st.columns(2)
+        col1.metric("Acciones con seguimiento", history["id_accion"].nunique() if "id_accion" in history.columns else 0)
+        col2.metric("Última actualización", clean_display_text(history.get("updated_at", pd.Series(dtype=str)).dropna().max()) if "updated_at" in history.columns and not history["updated_at"].dropna().empty else "")
 
 
 def render_questionnaire_link_card(title: str, url: str, description: str = "") -> None:
@@ -3263,8 +3267,6 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         st.info("Todavía no hay accesos registrados.")
     else:
         st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
-    render_task_reminder_admin(data, engine)
-    render_questionnaire_results(engine)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
     buffer = io.BytesIO()
@@ -3272,8 +3274,6 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         data.to_excel(writer, index=False, sheet_name="Estado actual")
         history.to_excel(writer, index=False, sheet_name="Historico")
         get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
-        get_questionnaire_responses(engine).to_excel(writer, index=False, sheet_name="Cuestionarios")
-        get_task_email_reminders(engine).to_excel(writer, index=False, sheet_name="Avisos tareas")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
