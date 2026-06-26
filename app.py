@@ -98,13 +98,13 @@ PROFILE_CONFIG = {
     "Dirección": {
         "secret": "PASSWORD_DIRECCION",
         "default_password": "Direccion2026!",
-        "role": "direccion",
+        "role": "perfil",
         "scope": None,
     },
     "Evaluación": {
         "secret": "PASSWORD_EVALUACION",
         "default_password": "Evaluacion2026!",
-        "role": "evaluacion",
+        "role": "perfil",
         "scope": None,
     },
 }
@@ -2982,18 +2982,152 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     )
 
 def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataFrame) -> None:
-    """Pestaña de evolución simplificada sin mostrar modificaciones registradas.
+    st.subheader("Registro de modificaciones")
+    st.caption("Tabla simplificada con quién modificó cada acción, cuándo lo hizo y qué campos cambió.")
 
-    Por decisión de uso, el registro detallado de cambios no se muestra en la
-    interfaz. Las modificaciones siguen guardándose internamente para mantener
-    trazabilidad técnica y copias de seguridad, pero no se listan en pantalla.
-    """
-    st.subheader("Evolución")
-    st.info("El registro detallado de modificaciones se ha ocultado en esta versión.")
-    if history is not None and not history.empty:
-        col1, col2 = st.columns(2)
-        col1.metric("Acciones con seguimiento", history["id_accion"].nunique() if "id_accion" in history.columns else 0)
-        col2.metric("Última actualización", clean_display_text(history.get("updated_at", pd.Series(dtype=str)).dropna().max()) if "updated_at" in history.columns and not history["updated_at"].dropna().empty else "")
+    if history.empty:
+        st.info("Todavía no hay modificaciones registradas. Cada vez que guardes una ficha de evaluación se añadirá una línea aquí.")
+        return
+
+    meta_columns = ["id_accion", "Ámbito", "Título", "Tipo", "Estado"]
+    history_meta = history.merge(all_data[meta_columns], on="id_accion", how="left")
+    history_meta = history_meta[history_meta["id_accion"].isin(set(df["id_accion"].astype(int)))].copy()
+    if history_meta.empty:
+        st.info("No hay modificaciones para los filtros seleccionados.")
+        return
+
+    def parse_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "1", "sí", "si", "yes", "y"}
+
+    def display_value(field: str, value: Any) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        if field in ["link_promotora_enviado", "link_participante_enviado"]:
+            return "Sí" if parse_bool(value) else "No"
+        text_value = safe_text(value)
+        if len(text_value) > 160:
+            return text_value[:157] + "..."
+        return text_value
+
+    tracked_fields = [
+        ("estado_evaluacion", "Estado de evaluación"),
+        ("cumplimiento_indicadores", "Cumplimiento de indicadores"),
+        ("valoracion_tecnica", "Valoración técnica"),
+        ("observaciones", "Observaciones"),
+        ("responsable_seguimiento", "Responsable seguimiento"),
+        ("fecha_actualizacion", "Fecha de evaluación"),
+        ("evidencias", "Evidencias / enlaces"),
+        ("riesgos", "Riesgos / bloqueos"),
+        ("proximos_pasos", "Próximos pasos"),
+        ("prioridad", "Prioridad"),
+        ("link_promotora", "Link Persona Promotora"),
+        ("link_promotora_enviado", "Check envío Persona Promotora"),
+        ("link_promotora_fecha", "Fecha envío Persona Promotora"),
+        ("link_participante", "Link Persona participante"),
+        ("link_participante_enviado", "Check envío Persona participante"),
+        ("link_participante_fecha", "Fecha envío Persona participante"),
+    ]
+    tracked_fields = [(field, label) for field, label in tracked_fields if field in history_meta.columns]
+
+    sort_cols = [c for c in ["id_accion", "updated_at_dt", "updated_at", "id"] if c in history_meta.columns]
+    history_meta = history_meta.sort_values(sort_cols).copy()
+
+    rows = []
+    for _, group in history_meta.groupby("id_accion", sort=False):
+        previous = None
+        for _, item in group.iterrows():
+            changed_labels = []
+            changed_details = []
+            if previous is None:
+                for field, label in tracked_fields:
+                    value = display_value(field, item.get(field))
+                    if value:
+                        changed_labels.append(label)
+                        changed_details.append(f"{label}: {value}")
+                if not changed_labels:
+                    changed_labels = ["Registro inicial"]
+                    changed_details = ["Registro inicial sin campos informados."]
+            else:
+                for field, label in tracked_fields:
+                    old_value = display_value(field, previous.get(field))
+                    new_value = display_value(field, item.get(field))
+                    if old_value != new_value:
+                        changed_labels.append(label)
+                        changed_details.append(f"{label}: {old_value or 'vacío'} → {new_value or 'vacío'}")
+                if not changed_labels:
+                    changed_labels = ["Guardado sin cambios visibles"]
+                    changed_details = ["Se guardó la ficha, pero no se detectaron cambios en los campos principales."]
+
+            updated_when = item.get("updated_at_dt")
+            if pd.isna(updated_when) if updated_when is not None else True:
+                updated_when = pd.to_datetime(item.get("updated_at"), errors="coerce")
+
+            rows.append({
+                "Cuándo": updated_when,
+                "Quién": safe_text(item.get("updated_by")) or "Sin identificar",
+                "Actividad": safe_text(item.get("Título")) or f"Acción {int(item.get('id_accion'))}",
+                "Ámbito": safe_text(item.get("Ámbito")),
+                "Qué ha modificado": "; ".join(changed_labels),
+                "Detalle del cambio": "\n".join(changed_details),
+            })
+            previous = item
+
+    changes = pd.DataFrame(rows)
+    if changes.empty:
+        st.info("No hay modificaciones para mostrar.")
+        return
+
+    changes = changes.sort_values("Cuándo", ascending=False).copy()
+    changes["Fecha"] = changes["Cuándo"].dt.strftime("%d/%m/%Y %H:%M").fillna("")
+
+    with st.expander("Filtros", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            users = sorted([u for u in changes["Quién"].dropna().unique().tolist() if safe_text(u)])
+            selected_users = st.multiselect("Quién", users, default=users)
+        with col2:
+            scopes = sorted([a for a in changes["Ámbito"].dropna().unique().tolist() if safe_text(a)])
+            selected_scopes = st.multiselect("Ámbito", scopes, default=scopes)
+        with col3:
+            text_filter = st.text_input("Buscar", placeholder="Actividad, campo o detalle...")
+
+    filtered_changes = changes.copy()
+    if selected_users:
+        filtered_changes = filtered_changes[filtered_changes["Quién"].isin(selected_users)]
+    if selected_scopes:
+        filtered_changes = filtered_changes[filtered_changes["Ámbito"].isin(selected_scopes)]
+    if text_filter:
+        haystack = filtered_changes[["Actividad", "Qué ha modificado", "Detalle del cambio", "Quién", "Ámbito"]].fillna("").agg(" ".join, axis=1).str.lower()
+        filtered_changes = filtered_changes[haystack.str.contains(text_filter.lower(), regex=False)]
+
+    st.metric("Modificaciones registradas", len(filtered_changes))
+    st.dataframe(
+        filtered_changes[["Quién", "Actividad", "Fecha", "Qué ha modificado", "Detalle del cambio"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Actividad": st.column_config.TextColumn("Qué actividad", width="large"),
+            "Detalle del cambio": st.column_config.TextColumn("Qué ha modificado", width="large"),
+            "Fecha": st.column_config.TextColumn("Cuándo", width="medium"),
+        },
+    )
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        filtered_changes[["Quién", "Actividad", "Ámbito", "Fecha", "Qué ha modificado", "Detalle del cambio"]].to_excel(writer, index=False, sheet_name="Registro cambios")
+    st.download_button(
+        "Descargar registro de modificaciones",
+        buffer.getvalue(),
+        "registro_modificaciones.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 def render_questionnaire_link_card(title: str, url: str, description: str = "") -> None:
@@ -3267,6 +3401,8 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         st.info("Todavía no hay accesos registrados.")
     else:
         st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
+    render_task_reminder_admin(data, engine)
+    render_questionnaire_results(engine)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
 
     buffer = io.BytesIO()
@@ -3274,6 +3410,8 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         data.to_excel(writer, index=False, sheet_name="Estado actual")
         history.to_excel(writer, index=False, sheet_name="Historico")
         get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
+        get_questionnaire_responses(engine).to_excel(writer, index=False, sheet_name="Cuestionarios")
+        get_task_email_reminders(engine).to_excel(writer, index=False, sheet_name="Avisos tareas")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
