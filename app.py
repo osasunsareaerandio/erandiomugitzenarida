@@ -316,7 +316,7 @@ def apply_brand_theme() -> None:
 
 
         /* Selector destacado de ficha de evaluación. */
-        .action-selector-card {
+        .action-selector-card {{
             background: linear-gradient(135deg, rgba(28, 48, 84, 0.97), rgba(50, 164, 207, 0.88));
             border: 1px solid rgba(28, 48, 84, 0.18);
             border-left: 8px solid var(--brand-gold);
@@ -324,34 +324,34 @@ def apply_brand_theme() -> None:
             padding: 1rem 1.15rem;
             margin: 0.25rem 0 0.75rem 0;
             box-shadow: 0 4px 16px rgba(28, 48, 84, 0.13);
-        }
+        }}
 
-        .action-selector-eyebrow {
+        .action-selector-eyebrow {{
             color: rgba(255,255,255,0.82) !important;
             font-size: 0.78rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.06em;
             margin-bottom: 0.2rem;
-        }
+        }}
 
-        .action-selector-title {
+        .action-selector-title {{
             color: var(--brand-white) !important;
             font-size: 1.28rem;
             font-weight: 780;
             line-height: 1.2;
             margin-bottom: 0.2rem;
-        }
+        }}
 
-        .action-selector-help {
+        .action-selector-help {{
             color: rgba(255,255,255,0.9) !important;
             font-size: 0.95rem;
             line-height: 1.35;
-        }
+        }}
 
-        div[data-testid="stSelectbox"] label p {
+        div[data-testid="stSelectbox"] label p {{
             font-weight: 700 !important;
-        }
+        }}
 
         /* Separadores visuales discretos. */
         hr {{
