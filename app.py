@@ -2867,21 +2867,68 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
 
 
 def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
-    st.subheader("Nuevos Retos")
-    st.caption("Espacio para recoger nuevas necesidades, retos o propuestas que aparezcan a lo largo del programa.")
+    st.markdown("""
+    <style>
+    .challenge-hero {
+        background: linear-gradient(135deg, rgba(28,48,84,0.96), rgba(50,164,207,0.88));
+        border-left: 8px solid #F9C14F;
+        border-radius: 1rem;
+        padding: 1.1rem 1.25rem;
+        margin: 0.2rem 0 1rem 0;
+        box-shadow: 0 4px 16px rgba(28,48,84,0.12);
+    }
+    .challenge-hero h2 {
+        color: #FFFFFF !important;
+        margin: 0;
+        font-size: 1.45rem;
+        line-height: 1.2;
+    }
+    .challenge-hero p {
+        color: rgba(255,255,255,0.92) !important;
+        margin: 0.35rem 0 0 0;
+        font-size: 0.98rem;
+    }
+    .challenge-note {
+        background: #FFFFFF;
+        border: 1px solid rgba(28,48,84,0.14);
+        border-left: 6px solid #AE7CAA;
+        border-radius: 0.85rem;
+        padding: 0.8rem 1rem;
+        margin: 0.4rem 0 1rem 0;
+        color: #1C3054;
+        box-shadow: 0 1px 8px rgba(28,48,84,0.04);
+    }
+    .challenge-section-title {
+        color: #1C3054 !important;
+        font-weight: 800;
+        font-size: 1.05rem;
+        margin: 0.6rem 0 0.35rem 0;
+    }
+    </style>
+    <div class="challenge-hero">
+        <h2>Nuevos Retos</h2>
+        <p>Espacio para recoger nuevas necesidades, propuestas o retos que aparezcan a lo largo del programa.</p>
+    </div>
+    <div class="challenge-note">
+        Registra aquí cuestiones que no estaban previstas inicialmente y que conviene valorar, priorizar o incorporar a la planificación.
+    </div>
+    """, unsafe_allow_html=True)
 
     ambito_options = sorted([safe_text(x) for x in data.get("Ámbito", pd.Series(dtype=str)).dropna().unique().tolist() if safe_text(x)])
-    action_options = ["Sin acción asociada"] + data.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
+    if "Otros" not in ambito_options:
+        ambito_options.append("Otros")
+    if not ambito_options:
+        ambito_options = ["Otros"]
 
     with st.expander("Añadir nuevo reto o necesidad", expanded=False):
+        st.markdown('<div class="challenge-section-title">Nuevo registro</div>', unsafe_allow_html=True)
         with st.form("new_challenge_form", clear_on_submit=True):
-            selected_action = st.selectbox("Id_acción + Título", action_options)
-            selected_ambito = st.selectbox("Ámbito", ambito_options if ambito_options else [""], index=0)
+            selected_ambito = st.selectbox("Ámbito", ambito_options, index=0)
             reto = st.text_input("Nuevo reto / necesidad detectada")
             descripcion = st.text_area("Descripción", height=90)
             propuesta = st.text_area("Propuesta de respuesta / posible actuación", height=90)
             c1, c2 = st.columns(2)
-            responsable = c1.text_input("Responsable / persona de referencia")
+            responsable = c1.text_input("Persona que propone")
             prioridad = c2.selectbox("Prioridad", PRIORITY_OPTIONS, index=1)
             c3, c4 = st.columns(2)
             fecha_registro = c3.date_input("Fecha de registro", value=date.today())
@@ -2896,19 +2943,10 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
             elif not safe_text(reto):
                 st.error("Introduce el nuevo reto o necesidad detectada.")
             else:
-                id_accion = None
-                accion_titulo = ""
-                ambito = selected_ambito
-                if selected_action != "Sin acción asociada":
-                    id_accion = int(selected_action.split(" - ")[0])
-                    accion_titulo = selected_action.split(" - ", 1)[1]
-                    matched = data[data["id_accion"].astype(int) == id_accion]
-                    if not matched.empty:
-                        ambito = safe_text(matched.iloc[0].get("Ámbito")) or ambito
                 add_new_challenge(engine, {
-                    "id_accion": id_accion,
-                    "accion_titulo": accion_titulo,
-                    "ambito": ambito,
+                    "id_accion": None,
+                    "accion_titulo": "",
+                    "ambito": selected_ambito,
                     "reto": reto,
                     "descripcion": descripcion,
                     "propuesta": propuesta,
@@ -2927,29 +2965,24 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         return
 
     visible = challenges.copy()
-    visible["Id_acción + Título"] = visible.apply(
-        lambda row: f"{int(float(row['id_accion'])):03d} - {safe_text(row.get('accion_titulo'))}" if safe_text(row.get("id_accion")) else "Sin acción asociada",
-        axis=1,
-    )
     editor_cols = [
-        "challenge_id", "id_accion", "accion_titulo", "Id_acción + Título", "ambito", "reto", "descripcion",
+        "challenge_id", "id_accion", "accion_titulo", "ambito", "reto", "descripcion",
         "propuesta", "responsable", "fecha_registro", "fecha_revision", "estado", "prioridad", "updated_by", "updated_at",
     ]
     edited = st.data_editor(
         visible[editor_cols],
         use_container_width=True,
         hide_index=True,
-        disabled=["challenge_id", "id_accion", "accion_titulo", "Id_acción + Título", "updated_by", "updated_at"],
+        disabled=["challenge_id", "id_accion", "accion_titulo", "updated_by", "updated_at"],
         column_config={
             "challenge_id": None,
             "id_accion": None,
             "accion_titulo": None,
-            "Id_acción + Título": st.column_config.TextColumn("Id_acción + Título", width="large"),
-            "ambito": st.column_config.SelectboxColumn("Ámbito", options=ambito_options if ambito_options else [""], width="medium"),
+            "ambito": st.column_config.SelectboxColumn("Ámbito", options=ambito_options, width="medium"),
             "reto": st.column_config.TextColumn("Nuevo reto / necesidad", width="large"),
             "descripcion": st.column_config.TextColumn("Descripción", width="large"),
             "propuesta": st.column_config.TextColumn("Propuesta / respuesta", width="large"),
-            "responsable": st.column_config.TextColumn("Responsable", width="medium"),
+            "responsable": st.column_config.TextColumn("Persona que propone", width="medium"),
             "fecha_registro": st.column_config.TextColumn("Fecha de registro", width="small"),
             "fecha_revision": st.column_config.TextColumn("Fecha de revisión", width="small"),
             "estado": st.column_config.SelectboxColumn("Estado", options=CHALLENGE_STATUS_OPTIONS, required=True, width="medium"),
@@ -2982,7 +3015,7 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         "reto": "Nuevo reto / necesidad",
         "descripcion": "Descripción",
         "propuesta": "Propuesta / respuesta",
-        "responsable": "Responsable",
+        "responsable": "Persona que propone",
         "fecha_registro": "Fecha de registro",
         "fecha_revision": "Fecha de revisión",
         "estado": "Estado",
@@ -2990,7 +3023,7 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         "updated_by": "Última modificación",
         "updated_at": "Fecha modificación",
     })
-    export_cols = ["Id_acción + Título", "Ámbito", "Nuevo reto / necesidad", "Descripción", "Propuesta / respuesta", "Responsable", "Fecha de registro", "Fecha de revisión", "Estado", "Prioridad", "Última modificación", "Fecha modificación"]
+    export_cols = ["Ámbito", "Nuevo reto / necesidad", "Descripción", "Propuesta / respuesta", "Persona que propone", "Fecha de registro", "Fecha de revisión", "Estado", "Prioridad", "Última modificación", "Fecha modificación"]
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         export[export_cols].to_excel(writer, index=False, sheet_name="Nuevos retos")
