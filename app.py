@@ -358,7 +358,29 @@ def apply_brand_theme() -> None:
         hr {{
             border-color: var(--brand-line);
         }}
-        </style>
+        
+
+        .gizagune-footer {
+            margin-top: 2.4rem;
+            padding-top: 0.65rem;
+            border-top: 1px solid rgba(28, 48, 84, 0.16);
+            color: rgba(28, 48, 84, 0.68) !important;
+            font-size: 0.72rem;
+            line-height: 1.35;
+            text-align: center;
+        }
+
+        .gizagune-footer span {
+            color: rgba(28, 48, 84, 0.78) !important;
+            font-weight: 650;
+        }
+
+        .gizagune-footer em {
+            color: rgba(28, 48, 84, 0.72) !important;
+            font-style: normal;
+            font-weight: 600;
+        }
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -3789,6 +3811,18 @@ def load_contacts_and_assignments(_engine: Engine) -> tuple[pd.DataFrame, pd.Dat
     return contacts, assignments
 
 
+def render_footer() -> None:
+    st.markdown(
+        """
+        <div class="gizagune-footer">
+            <span>Fundación Gizagune · CIF G95572350</span><br>
+            Herramienta de evaluación y seguimiento desarrollada por Fundación Gizagune como adaptación específica para el plan <em>Erandio Mugitzen ari da!</em> Diseño, estructura y contenidos metodológicos protegidos por derechos de propiedad intelectual —DPI— de Fundación Gizagune.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main() -> None:
     page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
     st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
@@ -3828,6 +3862,7 @@ def main() -> None:
 
     engine = get_engine()
     if render_public_questionnaire(engine):
+        render_footer()
         return
     if not authenticate(engine):
         return
@@ -3914,6 +3949,8 @@ def main() -> None:
         with st.spinner("Cargando administración..."):
             history = clean_interface_dataframe(get_history(engine))
         render_admin(data, history, engine)
+
+    render_footer()
 
 
 if __name__ == "__main__":
