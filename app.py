@@ -3509,11 +3509,22 @@ def main() -> None:
         data[optional_col] = data[optional_col].fillna(default_value)
 
     data = apply_profile_scope(data)
-    maybe_send_overdue_task_reminders(engine, data)
+
+    current_profile = st.session_state.get("profile_name", "")
+    current_role = st.session_state.get("role", "")
+    eje_profiles = {"Alimentación", "Deporte", "Educación", "Ocio y tiempo libre", "Bienestar emocional"}
+
+    # Los recordatorios automáticos de tareas solo se comprueban en perfiles con acceso a tareas/calendario
+    # o en administración. Los perfiles de eje tienen una navegación simplificada.
+    if current_role == "admin" or current_profile in {"Dirección", "Evaluación"}:
+        maybe_send_overdue_task_reminders(engine, data)
+
     filtered = filter_dataframe(data)
 
-    if st.session_state.get("role") == "admin":
+    if current_role == "admin":
         available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
+    elif current_profile in eje_profiles:
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
     else:
         available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud"]
 
