@@ -43,6 +43,7 @@ PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
 TASK_STATUS_OPTIONS = ["No iniciado", "En curso", "Completado", "Descartado"]
 EVENT_TYPE_OPTIONS = ["Evento", "Reunión", "Actividad", "Hito", "Otro"]
 CALENDAR_ITEM_TYPES = ["Todos", "Eventos/Reuniones", "Tareas"]
+CHALLENGE_STATUS_OPTIONS = ["Pendiente de valorar", "En análisis", "Incorporado a planificación", "En curso", "Completado", "Descartado"]
 QUESTIONNAIRE_TYPES = {"promotora": "Persona Promotora", "participante": "Persona participante"}
 LIKERT_OPTIONS = [1, 2, 3, 4, 5]
 LIKERT_SELECT_OPTIONS = ["Sin marcar", 1, 2, 3, 4, 5]
@@ -722,6 +723,29 @@ def init_db(_engine: Engine) -> None:
             )
             """
         ))
+        challenge_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS new_challenges (
+                challenge_id {challenge_id_type},
+                id_accion INTEGER,
+                accion_titulo TEXT,
+                ambito TEXT,
+                reto TEXT NOT NULL,
+                descripcion TEXT,
+                propuesta TEXT,
+                responsable TEXT,
+                fecha_registro TEXT,
+                fecha_revision TEXT,
+                estado TEXT NOT NULL DEFAULT 'Pendiente de valorar',
+                prioridad TEXT,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        ))
         response_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
         conn.execute(text(
             f"""
@@ -821,6 +845,103 @@ def get_action_contacts(_engine: Engine) -> pd.DataFrame:
     df["contacto_id"] = df["contacto_id"].astype(int)
     return df
 
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def get_new_challenges(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM new_challenges ORDER BY updated_at DESC, challenge_id DESC"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "challenge_id", "id_accion", "accion_titulo", "ambito", "reto", "descripcion", "propuesta",
+            "responsable", "fecha_registro", "fecha_revision", "estado", "prioridad", "created_by",
+            "created_at", "updated_by", "updated_at",
+        ])
+    return clean_interface_dataframe(df)
+
+
+def add_new_challenge(engine: Engine, payload: dict[str, Any], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    data = {
+        "id_accion": payload.get("id_accion"),
+        "accion_titulo": safe_text(payload.get("accion_titulo")),
+        "ambito": safe_text(payload.get("ambito")),
+        "reto": safe_text(payload.get("reto")),
+        "descripcion": safe_text(payload.get("descripcion")),
+        "propuesta": safe_text(payload.get("propuesta")),
+        "responsable": safe_text(payload.get("responsable")),
+        "fecha_registro": safe_text(payload.get("fecha_registro")) or date.today().isoformat(),
+        "fecha_revision": safe_text(payload.get("fecha_revision")),
+        "estado": safe_text(payload.get("estado")) or "Pendiente de valorar",
+        "prioridad": safe_text(payload.get("prioridad")) or "Media",
+        "created_by": safe_text(user_name),
+        "created_at": now,
+        "updated_by": safe_text(user_name),
+        "updated_at": now,
+    }
+    fields = list(data.keys())
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO new_challenges ({", ".join(fields)})
+                VALUES ({", ".join([":" + f for f in fields])})
+            """),
+            data,
+        )
+    clear_data_caches()
+
+
+def update_new_challenges(engine: Engine, challenges_df: pd.DataFrame, user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        for _, row in challenges_df.iterrows():
+            challenge_id = safe_text(row.get("challenge_id"))
+            if not challenge_id:
+                continue
+            payload = {
+                "challenge_id": int(float(challenge_id)),
+                "id_accion": int(float(row.get("id_accion"))) if safe_text(row.get("id_accion")) else None,
+                "accion_titulo": safe_text(row.get("accion_titulo")),
+                "ambito": safe_text(row.get("ambito")),
+                "reto": safe_text(row.get("reto")),
+                "descripcion": safe_text(row.get("descripcion")),
+                "propuesta": safe_text(row.get("propuesta")),
+                "responsable": safe_text(row.get("responsable")),
+                "fecha_registro": safe_text(row.get("fecha_registro")),
+                "fecha_revision": safe_text(row.get("fecha_revision")),
+                "estado": safe_text(row.get("estado")) or "Pendiente de valorar",
+                "prioridad": safe_text(row.get("prioridad")) or "Media",
+                "updated_by": safe_text(user_name),
+                "updated_at": now,
+            }
+            conn.execute(
+                text("""
+                    UPDATE new_challenges
+                    SET id_accion = :id_accion,
+                        accion_titulo = :accion_titulo,
+                        ambito = :ambito,
+                        reto = :reto,
+                        descripcion = :descripcion,
+                        propuesta = :propuesta,
+                        responsable = :responsable,
+                        fecha_registro = :fecha_registro,
+                        fecha_revision = :fecha_revision,
+                        estado = :estado,
+                        prioridad = :prioridad,
+                        updated_by = :updated_by,
+                        updated_at = :updated_at
+                    WHERE challenge_id = :challenge_id
+                """),
+                payload,
+            )
+    clear_data_caches()
+
+
+def delete_new_challenge(engine: Engine, challenge_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM new_challenges WHERE challenge_id = :challenge_id"), {"challenge_id": int(challenge_id)})
+    clear_data_caches()
 
 def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int], user_name: str) -> None:
     now = datetime.now().isoformat(timespec="seconds")
@@ -2744,6 +2865,142 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         )
 
 
+
+def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
+    st.subheader("Nuevos Retos")
+    st.caption("Espacio para recoger nuevas necesidades, retos o propuestas que aparezcan a lo largo del programa.")
+
+    ambito_options = sorted([safe_text(x) for x in data.get("Ámbito", pd.Series(dtype=str)).dropna().unique().tolist() if safe_text(x)])
+    action_options = ["Sin acción asociada"] + data.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
+
+    with st.expander("Añadir nuevo reto o necesidad", expanded=False):
+        with st.form("new_challenge_form", clear_on_submit=True):
+            selected_action = st.selectbox("Id_acción + Título", action_options)
+            selected_ambito = st.selectbox("Ámbito", ambito_options if ambito_options else [""], index=0)
+            reto = st.text_input("Nuevo reto / necesidad detectada")
+            descripcion = st.text_area("Descripción", height=90)
+            propuesta = st.text_area("Propuesta de respuesta / posible actuación", height=90)
+            c1, c2 = st.columns(2)
+            responsable = c1.text_input("Responsable / persona de referencia")
+            prioridad = c2.selectbox("Prioridad", PRIORITY_OPTIONS, index=1)
+            c3, c4 = st.columns(2)
+            fecha_registro = c3.date_input("Fecha de registro", value=date.today())
+            usar_revision = c4.checkbox("Añadir fecha de revisión")
+            fecha_revision = st.date_input("Fecha de revisión", value=date.today()) if usar_revision else None
+            estado = st.selectbox("Estado", CHALLENGE_STATUS_OPTIONS, index=0)
+            submitted = st.form_submit_button("Guardar nuevo reto")
+
+        if submitted:
+            if not user_name:
+                st.error("Antes de guardar, entra con un perfil identificado.")
+            elif not safe_text(reto):
+                st.error("Introduce el nuevo reto o necesidad detectada.")
+            else:
+                id_accion = None
+                accion_titulo = ""
+                ambito = selected_ambito
+                if selected_action != "Sin acción asociada":
+                    id_accion = int(selected_action.split(" - ")[0])
+                    accion_titulo = selected_action.split(" - ", 1)[1]
+                    matched = data[data["id_accion"].astype(int) == id_accion]
+                    if not matched.empty:
+                        ambito = safe_text(matched.iloc[0].get("Ámbito")) or ambito
+                add_new_challenge(engine, {
+                    "id_accion": id_accion,
+                    "accion_titulo": accion_titulo,
+                    "ambito": ambito,
+                    "reto": reto,
+                    "descripcion": descripcion,
+                    "propuesta": propuesta,
+                    "responsable": responsable,
+                    "fecha_registro": fecha_registro.isoformat(),
+                    "fecha_revision": fecha_revision.isoformat() if fecha_revision else "",
+                    "estado": estado,
+                    "prioridad": prioridad,
+                }, user_name)
+                st.success("Nuevo reto guardado.")
+                st.rerun()
+
+    challenges = get_new_challenges(engine)
+    if challenges.empty:
+        st.info("Todavía no hay nuevos retos registrados.")
+        return
+
+    visible = challenges.copy()
+    visible["Id_acción + Título"] = visible.apply(
+        lambda row: f"{int(float(row['id_accion'])):03d} - {safe_text(row.get('accion_titulo'))}" if safe_text(row.get("id_accion")) else "Sin acción asociada",
+        axis=1,
+    )
+    editor_cols = [
+        "challenge_id", "id_accion", "accion_titulo", "Id_acción + Título", "ambito", "reto", "descripcion",
+        "propuesta", "responsable", "fecha_registro", "fecha_revision", "estado", "prioridad", "updated_by", "updated_at",
+    ]
+    edited = st.data_editor(
+        visible[editor_cols],
+        use_container_width=True,
+        hide_index=True,
+        disabled=["challenge_id", "id_accion", "accion_titulo", "Id_acción + Título", "updated_by", "updated_at"],
+        column_config={
+            "challenge_id": None,
+            "id_accion": None,
+            "accion_titulo": None,
+            "Id_acción + Título": st.column_config.TextColumn("Id_acción + Título", width="large"),
+            "ambito": st.column_config.SelectboxColumn("Ámbito", options=ambito_options if ambito_options else [""], width="medium"),
+            "reto": st.column_config.TextColumn("Nuevo reto / necesidad", width="large"),
+            "descripcion": st.column_config.TextColumn("Descripción", width="large"),
+            "propuesta": st.column_config.TextColumn("Propuesta / respuesta", width="large"),
+            "responsable": st.column_config.TextColumn("Responsable", width="medium"),
+            "fecha_registro": st.column_config.TextColumn("Fecha de registro", width="small"),
+            "fecha_revision": st.column_config.TextColumn("Fecha de revisión", width="small"),
+            "estado": st.column_config.SelectboxColumn("Estado", options=CHALLENGE_STATUS_OPTIONS, required=True, width="medium"),
+            "prioridad": st.column_config.SelectboxColumn("Prioridad", options=PRIORITY_OPTIONS, required=True, width="small"),
+            "updated_by": st.column_config.TextColumn("Última modificación", width="medium"),
+            "updated_at": st.column_config.TextColumn("Fecha modificación", width="medium"),
+        },
+        key="new_challenges_editor",
+    )
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("Guardar cambios en nuevos retos", key="save_new_challenges"):
+            if not user_name:
+                st.error("Antes de guardar, entra con un perfil identificado.")
+            else:
+                update_new_challenges(engine, edited, user_name)
+                st.success("Cambios guardados.")
+                st.rerun()
+    with c2:
+        delete_options = visible["challenge_id"].astype(int).tolist()
+        delete_id = st.selectbox("Eliminar reto", delete_options, format_func=lambda x: f"Reto {x}", key="delete_new_challenge_select")
+        if st.button("Eliminar reto seleccionado", key="delete_new_challenge"):
+            delete_new_challenge(engine, int(delete_id))
+            st.success("Reto eliminado.")
+            st.rerun()
+
+    export = visible.rename(columns={
+        "ambito": "Ámbito",
+        "reto": "Nuevo reto / necesidad",
+        "descripcion": "Descripción",
+        "propuesta": "Propuesta / respuesta",
+        "responsable": "Responsable",
+        "fecha_registro": "Fecha de registro",
+        "fecha_revision": "Fecha de revisión",
+        "estado": "Estado",
+        "prioridad": "Prioridad",
+        "updated_by": "Última modificación",
+        "updated_at": "Fecha modificación",
+    })
+    export_cols = ["Id_acción + Título", "Ámbito", "Nuevo reto / necesidad", "Descripción", "Propuesta / respuesta", "Responsable", "Fecha de registro", "Fecha de revisión", "Estado", "Prioridad", "Última modificación", "Fecha modificación"]
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        export[export_cols].to_excel(writer, index=False, sheet_name="Nuevos retos")
+    st.download_button(
+        "Descargar nuevos retos en Excel",
+        buffer.getvalue(),
+        "nuevos_retos.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
 def render_dashboard(df: pd.DataFrame) -> None:
     chart_df = df.copy()
 
@@ -3466,6 +3723,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
         get_access_log(engine).to_excel(writer, index=False, sheet_name="Accesos")
         get_questionnaire_responses(engine).to_excel(writer, index=False, sheet_name="Cuestionarios")
         get_task_email_reminders(engine).to_excel(writer, index=False, sheet_name="Avisos tareas")
+        get_new_challenges(engine).to_excel(writer, index=False, sheet_name="Nuevos retos")
     st.download_button("Descargar copia completa", buffer.getvalue(), "copia_evaluacion_completa.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
@@ -3576,11 +3834,11 @@ def main() -> None:
     filtered = filter_dataframe(data)
 
     if current_role == "admin":
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
     elif current_profile in eje_profiles:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Red Local de Salud"]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Tareas", "Calendario", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
@@ -3597,6 +3855,9 @@ def main() -> None:
 
     elif selected_page == "Ficha de evaluación":
         render_action_detail(filtered, data, user_name, engine)
+
+    elif selected_page == "Nuevos Retos":
+        render_new_challenges(data, user_name, engine)
 
     elif selected_page == "Tareas":
         render_tasks(data, user_name, engine)
