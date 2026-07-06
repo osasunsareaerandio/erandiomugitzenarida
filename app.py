@@ -360,7 +360,7 @@ def apply_brand_theme() -> None:
         }}
         
 
-        .gizagune-footer {
+        .gizagune-footer {{
             margin-top: 2.4rem;
             padding-top: 0.65rem;
             border-top: 1px solid rgba(28, 48, 84, 0.16);
@@ -368,18 +368,18 @@ def apply_brand_theme() -> None:
             font-size: 0.72rem;
             line-height: 1.35;
             text-align: center;
-        }
+        }}
 
-        .gizagune-footer span {
+        .gizagune-footer span {{
             color: rgba(28, 48, 84, 0.78) !important;
             font-weight: 650;
-        }
+        }}
 
-        .gizagune-footer em {
+        .gizagune-footer em {{
             color: rgba(28, 48, 84, 0.72) !important;
             font-style: normal;
             font-weight: 600;
-        }
+        }}
 </style>
         """,
         unsafe_allow_html=True,
