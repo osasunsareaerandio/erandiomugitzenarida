@@ -3130,28 +3130,39 @@ def render_dashboard(df: pd.DataFrame) -> None:
     st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_evaluacion", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
-    visible_columns = [
-        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "Agente promotor", "Temporalidad",
-        "personas_red_asignadas", "num_personas_red",
-        "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
-    ]
-    st.caption("Selecciona una fila de la matriz para abrir la ficha de evaluación de esa acción.")
-    matrix_event = st.dataframe(
-        df[visible_columns],
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="matrix_actions_table",
-    )
-    selected_rows = matrix_event.selection.rows if matrix_event is not None else []
-    if selected_rows:
-        selected_row_index = int(selected_rows[0])
-        if 0 <= selected_row_index < len(df):
-            selected_action_id = int(df.iloc[selected_row_index]["id_accion"])
+    # La matriz se presenta como selector de acciones. Para los perfiles de ámbito,
+    # ``df`` ya llega limitado exclusivamente a las acciones de su propio ámbito.
+    if df.empty:
+        st.info("No hay acciones disponibles para este perfil y los filtros seleccionados.")
+    else:
+        profile_name = safe_text(st.session_state.get("profile_name"))
+        scope = safe_text(st.session_state.get("scope"))
+        if scope:
+            st.caption(f"Acciones disponibles del ámbito de {scope}.")
+        else:
+            st.caption("Selecciona una acción para abrir directamente su ficha de evaluación.")
+
+        action_options = df.apply(
+            lambda row: f"{int(row['id_accion']):03d} - {safe_text(row['Título'])}",
+            axis=1,
+        ).tolist()
+        selected_action = st.selectbox(
+            "Selecciona una acción",
+            action_options,
+            key=f"matrix_action_selector_{profile_name or 'general'}",
+            placeholder="Elige una acción...",
+        )
+
+        if selected_action:
+            selected_action_id = int(selected_action.split(" - ", 1)[0])
             st.markdown("---")
-            st.markdown("## Ficha de evaluación de la acción seleccionada")
-            render_action_detail(df, all_data, user_name, engine, selected_action_id=selected_action_id)
+            render_action_detail(
+                df,
+                all_data,
+                user_name,
+                engine,
+                selected_action_id=selected_action_id,
+            )
 
     st.markdown("### Asignar personas de la Red Local de Salud")
     if contacts.empty:
