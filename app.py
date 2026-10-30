@@ -1610,7 +1610,7 @@ def sidebar_user() -> str:
         if role == "admin":
             st.caption("Acceso de administración: todas las actividades, evolución y administración técnica.")
         else:
-            st.caption("Perfil de eje: puede ver todas las actividades; las modificaciones quedan registradas con este perfil.")
+            st.caption("Perfil de ámbito: puede consultar y evaluar las acciones de su propio ámbito.")
         if st.button("Cerrar sesión"):
             st.session_state.clear()
             st.rerun()
@@ -1646,13 +1646,12 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
-    """Todos los perfiles ven todas las actividades.
-
-    Los perfiles ya no limitan por eje; solo identifican quién accede y quién
-    realiza cada modificación. Se mantiene la función para no tocar el flujo
-    principal de la aplicación.
-    """
-    return data.copy()
+    """Limita las acciones al ámbito asignado al perfil, salvo administración."""
+    scope = safe_text(st.session_state.get("scope"))
+    role = safe_text(st.session_state.get("role"))
+    if role == "admin" or not scope:
+        return data.copy()
+    return data[data["Ámbito"].astype(str).str.strip().str.casefold() == scope.casefold()].copy()
 
 
 
@@ -3136,7 +3135,23 @@ def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFra
         "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
-    st.dataframe(df[visible_columns], use_container_width=True, hide_index=True)
+    st.caption("Selecciona una fila de la matriz para abrir la ficha de evaluación de esa acción.")
+    matrix_event = st.dataframe(
+        df[visible_columns],
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="matrix_actions_table",
+    )
+    selected_rows = matrix_event.selection.rows if matrix_event is not None else []
+    if selected_rows:
+        selected_row_index = int(selected_rows[0])
+        if 0 <= selected_row_index < len(df):
+            selected_action_id = int(df.iloc[selected_row_index]["id_accion"])
+            st.markdown("---")
+            st.markdown("## Ficha de evaluación de la acción seleccionada")
+            render_action_detail(df, all_data, user_name, engine, selected_action_id=selected_action_id)
 
     st.markdown("### Asignar personas de la Red Local de Salud")
     if contacts.empty:
@@ -3509,7 +3524,7 @@ def render_questionnaire_link_card(title: str, url: str, description: str = "") 
             label_visibility="collapsed",
         )
 
-def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine) -> None:
+def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine, selected_action_id: int | None = None) -> None:
     if df.empty:
         st.info("No hay acciones para los filtros seleccionados.")
         return
@@ -3524,14 +3539,21 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         """,
         unsafe_allow_html=True,
     )
-    selected = st.selectbox(
-        "Selecciona una acción",
-        options,
-        key="action_detail_selector",
-        label_visibility="collapsed",
-    )
-    selected_id = int(selected.split(" - ")[0])
-    row = all_data[all_data["id_accion"] == selected_id].iloc[0]
+    if selected_action_id is None:
+        selected = st.selectbox(
+            "Selecciona una acción",
+            options,
+            key="action_detail_selector",
+            label_visibility="collapsed",
+        )
+        selected_id = int(selected.split(" - ")[0])
+    else:
+        selected_id = int(selected_action_id)
+    selected_rows = all_data[all_data["id_accion"] == selected_id]
+    if selected_rows.empty:
+        st.warning("La acción seleccionada no está disponible para este perfil.")
+        return
+    row = selected_rows.iloc[0]
 
     st.subheader(row["Título"])
     meta1, meta2, meta3 = st.columns(3)
@@ -3888,8 +3910,6 @@ def main() -> None:
             data[optional_col] = default_value
         data[optional_col] = data[optional_col].fillna(default_value)
 
-    data = apply_profile_scope(data)
-
     current_profile = st.session_state.get("profile_name", "")
     current_role = st.session_state.get("role", "")
     eje_profiles = {"Alimentación", "Deporte", "Educación", "Ocio y tiempo libre", "Bienestar emocional"}
@@ -3902,9 +3922,11 @@ def main() -> None:
     filtered = filter_dataframe(data)
 
     if current_role == "admin":
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
+        # Administración: únicamente las tres vistas solicitadas.
+        available_pages = ["Panel general", "Matriz", "Red Local de Salud"]
     elif current_profile in eje_profiles:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Red Local de Salud"]
+        # Perfiles de ámbito: sin Nuevos Retos ni pestaña independiente de ficha.
+        available_pages = ["Panel general", "Matriz", "Red Local de Salud"]
     else:
         available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud"]
 
@@ -3919,6 +3941,10 @@ def main() -> None:
             data_with_assignments = merge_assignments(data, assignments, contacts)
             data_with_assignments = clean_interface_dataframe(data_with_assignments)
             filtered_with_assignments = data_with_assignments[data_with_assignments["id_accion"].isin(filtered["id_accion"])].copy()
+            if current_role != "admin" and current_profile in eje_profiles:
+                scoped_ids = apply_profile_scope(filtered_with_assignments)["id_accion"].tolist()
+                filtered_with_assignments = filtered_with_assignments[filtered_with_assignments["id_accion"].isin(scoped_ids)].copy()
+                data_with_assignments = data_with_assignments[data_with_assignments["id_accion"].isin(scoped_ids)].copy()
         render_matrix(filtered_with_assignments, data_with_assignments, contacts, assignments, user_name, engine)
 
     elif selected_page == "Ficha de evaluación":
