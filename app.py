@@ -3527,12 +3527,15 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         """,
         unsafe_allow_html=True,
     )
-    selected = st.selectbox(
-        "Selecciona una acción",
-        options,
-        key="action_detail_selector",
-        label_visibility="collapsed",
-    )
+    with st.container(border=True):
+        st.markdown("#### Selecciona la actividad que quieres evaluar")
+        st.caption("El desplegable muestra únicamente las actividades disponibles para tu perfil.")
+        selected = st.selectbox(
+            "Actividad",
+            options,
+            key="action_detail_selector",
+            label_visibility="visible",
+        )
     selected_id = int(selected.split(" - ")[0])
     row = all_data[all_data["id_accion"] == selected_id].iloc[0]
 
@@ -3916,7 +3919,7 @@ def main() -> None:
         ]
     elif current_profile in eje_profiles:
         available_pages = [
-            "Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud",
+            "Panel general", "Ficha de evaluación", "Red Local de Salud",
         ]
     else:
         available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
