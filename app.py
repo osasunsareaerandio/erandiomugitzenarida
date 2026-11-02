@@ -102,12 +102,6 @@ PROFILE_CONFIG = {
         "role": "perfil",
         "scope": None,
     },
-    "Evaluación": {
-        "secret": "PASSWORD_EVALUACION",
-        "default_password": "Evaluacion2026!",
-        "role": "perfil",
-        "scope": None,
-    },
 }
 
 
@@ -1646,13 +1640,22 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
-    """Todos los perfiles ven todas las actividades.
+    """Limita las acciones al ámbito del perfil cuando corresponde.
 
-    Los perfiles ya no limitan por eje; solo identifican quién accede y quién
-    realiza cada modificación. Se mantiene la función para no tocar el flujo
-    principal de la aplicación.
+    Administración y Dirección mantienen visión transversal. Los perfiles de
+    Alimentación, Deporte, Educación, Ocio y tiempo libre y Bienestar emocional
+    solo trabajan con las acciones de su propio ámbito.
     """
-    return data.copy()
+    scope = safe_text(st.session_state.get("scope"))
+    role = safe_text(st.session_state.get("role"))
+    profile_name = safe_text(st.session_state.get("profile_name"))
+
+    if role == "admin" or profile_name == "Dirección" or not scope:
+        return data.copy()
+
+    return data[
+        data["Ámbito"].astype(str).str.strip().str.casefold() == scope.casefold()
+    ].copy()
 
 
 
@@ -3896,17 +3899,27 @@ def main() -> None:
 
     # Los recordatorios automáticos de tareas solo se comprueban en perfiles con acceso a tareas/calendario
     # o en administración. Los perfiles de eje tienen una navegación simplificada.
-    if current_role == "admin" or current_profile in {"Dirección", "Evaluación"}:
+    if current_role == "admin" or current_profile == "Dirección":
         maybe_send_overdue_task_reminders(engine, data)
 
     filtered = filter_dataframe(data)
 
     if current_role == "admin":
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración"]
+        available_pages = [
+            "Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos",
+            "Calendario", "Red Local de Salud", "Evolución", "Administración",
+        ]
+    elif current_profile == "Dirección":
+        available_pages = [
+            "Panel general", "Matriz", "Ficha de evaluación", "Tareas",
+            "Calendario", "Red Local de Salud",
+        ]
     elif current_profile in eje_profiles:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Red Local de Salud"]
+        available_pages = [
+            "Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud",
+        ]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos", "Tareas", "Calendario", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
