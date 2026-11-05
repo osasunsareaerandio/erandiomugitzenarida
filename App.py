@@ -11,6 +11,7 @@ from datetime import date, datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -714,6 +715,25 @@ def init_db(_engine: Engine) -> None:
                 role TEXT NOT NULL,
                 scope TEXT,
                 logged_at TEXT NOT NULL
+            )
+            """
+        ))
+        help_id_type = "BIGSERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        conn.execute(text(
+            f"""
+            CREATE TABLE IF NOT EXISTS help_requests (
+                request_id {help_id_type},
+                profile_name TEXT,
+                scope TEXT,
+                action_id INTEGER,
+                action_title TEXT,
+                contact_name TEXT,
+                contact_email TEXT,
+                contact_phone TEXT,
+                reason TEXT NOT NULL,
+                service_open INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'Pendiente',
+                created_at TEXT NOT NULL
             )
             """
         ))
@@ -3717,68 +3737,104 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     if current_estado_actual not in ACTION_STATUS_OPTIONS:
         current_estado_actual = "No iniciada"
 
-    activity_table = pd.DataFrame([{
-        "Título": safe_text(row.get("Título")),
-        "Ámbito": current_scope,
-        "Tipo": current_type,
-        "Estado original": safe_text(row.get("Estado")),
-        "Estado actual": current_estado_actual,
-        "Medida": safe_text(row.get("Medida")),
-        "Agente promotor": safe_text(row.get("Agente promotor")),
-        "Personas destinatarias": safe_text(row.get("Personas destinatarias")),
-        "Temporalidad": safe_text(row.get("Temporalidad")),
-        "Descripción": safe_text(row.get("Descripción")),
-        "Indicadores previstos": safe_text(row.get("Indicadores")),
-        "Recursos": safe_text(row.get("Recursos")),
-        "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
-    }])
+    with st.form(f"activity_info_form_{selected_id}"):
+        st.markdown("### Datos de la actividad")
+        st.caption("Actualiza la información de la actividad. El Estado original se conserva como dato de referencia y no puede modificarse.")
 
-    edited_activity = st.data_editor(
-        activity_table,
-        use_container_width=True,
-        hide_index=True,
-        height=128,
-        disabled=["Título", "Estado original"],
-        column_config={
-            "Título": st.column_config.TextColumn("Título", width="large"),
-            "Ámbito": st.column_config.SelectboxColumn("Ámbito", options=scope_options, required=True, width="medium"),
-            "Tipo": st.column_config.SelectboxColumn("Tipo", options=type_options, required=True, width="medium"),
-            "Estado original": st.column_config.TextColumn("Estado original", width="medium", help="Dato de la matriz original. No se puede modificar."),
-            "Estado actual": st.column_config.SelectboxColumn("Estado actual", options=ACTION_STATUS_OPTIONS, required=True, width="medium"),
-            "Medida": st.column_config.TextColumn("Medida", width="large"),
-            "Agente promotor": st.column_config.TextColumn("Agente promotor", width="large"),
-            "Personas destinatarias": st.column_config.TextColumn("Personas destinatarias", width="large"),
-            "Temporalidad": st.column_config.TextColumn("Temporalidad", width="medium"),
-            "Descripción": st.column_config.TextColumn("Descripción", width="large"),
-            "Indicadores previstos": st.column_config.TextColumn("Indicadores previstos", width="large"),
-            "Recursos": st.column_config.TextColumn("Recursos", width="large"),
-            "Responsable de seguimiento": st.column_config.TextColumn(
+        with st.container(border=True):
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Ámbito**")
+            ambito_edit = right.selectbox(
+                "Ámbito",
+                scope_options,
+                index=scope_options.index(current_scope) if current_scope in scope_options else 0,
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Tipo**")
+            tipo_edit = right.selectbox(
+                "Tipo",
+                type_options,
+                index=type_options.index(current_type) if current_type in type_options else 0,
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Estado original**")
+            right.text_input(
+                "Estado original",
+                value=safe_text(row.get("Estado")),
+                disabled=True,
+                label_visibility="collapsed",
+                help="Dato procedente de la matriz original. No se puede modificar.",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Estado actual**")
+            estado_actual_edit = right.selectbox(
+                "Estado actual",
+                ACTION_STATUS_OPTIONS,
+                index=ACTION_STATUS_OPTIONS.index(current_estado_actual),
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Medida**")
+            medida_edit = right.text_input("Medida", value=safe_text(row.get("Medida")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Agente promotor**")
+            agente_edit = right.text_input("Agente promotor", value=safe_text(row.get("Agente promotor")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Personas destinatarias**")
+            destinatarias_edit = right.text_input("Personas destinatarias", value=safe_text(row.get("Personas destinatarias")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Temporalidad**")
+            temporalidad_edit = right.text_input("Temporalidad", value=safe_text(row.get("Temporalidad")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Descripción**")
+            descripcion_edit = right.text_area("Descripción", value=safe_text(row.get("Descripción")), height=110, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Indicadores previstos**")
+            indicadores_edit = right.text_area("Indicadores previstos", value=safe_text(row.get("Indicadores")), height=110, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Recursos**")
+            recursos_edit = right.text_area("Recursos", value=safe_text(row.get("Recursos")), height=90, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Responsable de seguimiento**")
+            responsable_edit = right.text_input(
                 "Responsable de seguimiento",
-                width="large",
-                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto."
-            ),
-        },
-        key=f"activity_info_editor_{selected_id}",
-    )
+                value=safe_text(row.get("responsable_seguimiento")),
+                label_visibility="collapsed",
+                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto.",
+            )
 
-    if st.button("Guardar información de la actividad", key=f"save_activity_info_{selected_id}", type="primary"):
+        save_activity = st.form_submit_button("Guardar información de la actividad", type="primary")
+
+    if save_activity:
         if not user_name:
             st.error("Antes de guardar, entra con un perfil identificado.")
         else:
-            edited_row = edited_activity.iloc[0]
             save_action_details(engine, {
                 "id_accion": selected_id,
-                "ambito": edited_row.get("Ámbito"),
-                "tipo": edited_row.get("Tipo"),
-                "medida": edited_row.get("Medida"),
-                "agente_promotor": edited_row.get("Agente promotor"),
-                "personas_destinatarias": edited_row.get("Personas destinatarias"),
-                "temporalidad": edited_row.get("Temporalidad"),
-                "descripcion": edited_row.get("Descripción"),
-                "indicadores": edited_row.get("Indicadores previstos"),
-                "recursos": edited_row.get("Recursos"),
-                "estado_actual": edited_row.get("Estado actual"),
-                "responsable_seguimiento": edited_row.get("Responsable de seguimiento"),
+                "ambito": ambito_edit,
+                "tipo": tipo_edit,
+                "medida": medida_edit,
+                "agente_promotor": agente_edit,
+                "personas_destinatarias": destinatarias_edit,
+                "temporalidad": temporalidad_edit,
+                "descripcion": descripcion_edit,
+                "indicadores": indicadores_edit,
+                "recursos": recursos_edit,
+                "estado_actual": estado_actual_edit,
+                "responsable_seguimiento": responsable_edit,
             }, user_name)
             st.success("Información de la actividad actualizada.")
             st.rerun()
@@ -4055,6 +4111,162 @@ def load_contacts_and_assignments(_engine: Engine) -> tuple[pd.DataFrame, pd.Dat
     return contacts, assignments
 
 
+def madrid_now() -> datetime:
+    return datetime.now(ZoneInfo("Europe/Madrid"))
+
+
+def help_service_is_open(now: datetime | None = None) -> bool:
+    current = now or madrid_now()
+    return 9 <= current.hour < 17
+
+
+def save_help_request(engine: Engine, payload: dict[str, Any]) -> int | None:
+    data = {
+        "profile_name": safe_text(payload.get("profile_name")),
+        "scope": safe_text(payload.get("scope")),
+        "action_id": payload.get("action_id"),
+        "action_title": safe_text(payload.get("action_title")),
+        "contact_name": safe_text(payload.get("contact_name")),
+        "contact_email": safe_text(payload.get("contact_email")),
+        "contact_phone": safe_text(payload.get("contact_phone")),
+        "reason": safe_text(payload.get("reason")),
+        "service_open": int(bool(payload.get("service_open"))),
+        "status": "Pendiente",
+        "created_at": madrid_now().isoformat(timespec="seconds"),
+    }
+    fields = list(data.keys())
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(f"""
+                INSERT INTO help_requests ({", ".join(fields)})
+                VALUES ({", ".join([":" + field for field in fields])})
+            """),
+            data,
+        )
+        try:
+            inserted = result.lastrowid
+            return int(inserted) if inserted is not None else None
+        except Exception:
+            return None
+
+
+def send_help_request_email(payload: dict[str, Any]) -> None:
+    recipient = get_secret("HELP_REQUEST_TO", "osasunsarea@erandio.eus").strip() or "osasunsarea@erandio.eus"
+    profile_name = safe_text(payload.get("profile_name")) or "Sin identificar"
+    scope = safe_text(payload.get("scope")) or "Sin ámbito"
+    action_title = safe_text(payload.get("action_title"))
+    action_id = payload.get("action_id")
+    action_label = f"{int(action_id):03d} - {action_title}" if action_id and action_title else (action_title or "No asociada a una actividad")
+    service_label = "Dentro del horario de atención" if payload.get("service_open") else "Fuera del horario de atención"
+    subject = f"Solicitud de ayuda - {profile_name}"
+    body = "\n".join([
+        "Nueva solicitud de ayuda desde Erandio Mugitzen ari da!",
+        "",
+        f"Perfil: {profile_name}",
+        f"Ámbito: {scope}",
+        f"Actividad: {action_label}",
+        f"Nombre: {safe_text(payload.get('contact_name')) or '-'}",
+        f"Email: {safe_text(payload.get('contact_email')) or '-'}",
+        f"Teléfono: {safe_text(payload.get('contact_phone')) or '-'}",
+        f"Horario: {service_label}",
+        "",
+        "Motivo de la petición:",
+        safe_text(payload.get("reason")),
+        "",
+        f"Fecha y hora: {madrid_now().strftime('%d/%m/%Y %H:%M')}",
+    ])
+
+    cfg = get_task_mail_config()
+    if not (cfg["host"] and cfg["user"] and cfg["password"] and cfg["mail_from"]):
+        raise RuntimeError("SMTP no configurado para el envío de avisos de ayuda.")
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["mail_from"]
+    msg["To"] = recipient
+    msg.set_content(body)
+    if cfg["use_ssl"]:
+        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20) as smtp:
+            smtp.login(cfg["user"], cfg["password"])
+            smtp.send_message(msg)
+    else:
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(cfg["user"], cfg["password"])
+            smtp.send_message(msg)
+
+
+def render_help(data: pd.DataFrame, engine: Engine) -> None:
+    now = madrid_now()
+    service_open = help_service_is_open(now)
+    st.subheader("Ayuda / Atención inmediata")
+    if service_open:
+        st.success("Atención inmediata disponible · Horario: 09:00–17:00")
+    else:
+        st.info("Fuera del horario de atención inmediata. Puedes dejar tu solicitud y la revisaremos en el siguiente horario disponible (09:00–17:00).")
+
+    st.caption("Indica cómo podemos contactar contigo y describe brevemente qué necesitas.")
+
+    action_options = ["Sin actividad asociada"]
+    if data is not None and not data.empty:
+        action_options += data.apply(lambda row: f"{int(row['id_accion']):03d} - {safe_text(row['Título'])}", axis=1).tolist()
+
+    with st.form("help_request_form", clear_on_submit=True):
+        contact_name = st.text_input("Nombre, opcional")
+        c1, c2 = st.columns(2)
+        contact_email = c1.text_input("Email")
+        contact_phone = c2.text_input("Teléfono")
+        selected_action = st.selectbox("Actividad relacionada, opcional", action_options)
+        reason = st.text_area("Motivo de la petición de ayuda", height=140, placeholder="Describe brevemente el problema o la ayuda que necesitas")
+        submitted = st.form_submit_button("Enviar solicitud de ayuda", type="primary")
+
+    if submitted:
+        email_value = safe_text(contact_email)
+        phone_value = safe_text(contact_phone)
+        reason_value = safe_text(reason)
+        if not email_value and not phone_value:
+            st.error("Indica al menos un email o un teléfono de contacto.")
+        elif not reason_value:
+            st.error("Describe el motivo de la petición de ayuda.")
+        else:
+            action_id = None
+            action_title = ""
+            if selected_action != "Sin actividad asociada":
+                try:
+                    action_id = int(selected_action.split(" - ", 1)[0])
+                    action_title = selected_action.split(" - ", 1)[1]
+                except Exception:
+                    action_id = None
+                    action_title = selected_action
+            payload = {
+                "profile_name": st.session_state.get("profile_name", ""),
+                "scope": st.session_state.get("scope", ""),
+                "action_id": action_id,
+                "action_title": action_title,
+                "contact_name": contact_name,
+                "contact_email": email_value,
+                "contact_phone": phone_value,
+                "reason": reason_value,
+                "service_open": service_open,
+            }
+            save_help_request(engine, payload)
+            try:
+                send_help_request_email(payload)
+                st.success("Solicitud enviada. Hemos recibido el aviso por correo.")
+            except Exception as exc:
+                st.warning("La solicitud ha quedado registrada, pero no se pudo enviar el aviso por correo. Puedes usar WhatsApp para contacto inmediato.")
+                st.caption(f"Detalle técnico: {safe_text(exc)}")
+
+    whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
+    whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
+    st.markdown(
+        f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:.65rem 1rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;">Contactar por WhatsApp</a>',
+        unsafe_allow_html=True,
+    )
+    st.caption("El botón abre WhatsApp para contactar directamente con el servicio.")
+
+
 def render_footer() -> None:
     st.markdown(
         """
@@ -4159,19 +4371,19 @@ def main() -> None:
     if current_role == "admin":
         available_pages = [
             "Panel general", "Matriz", "Ficha de actividad", "Nuevos Retos",
-            "Calendario", "Red Local de Salud", "Evolución", "Administración",
+            "Calendario", "Red Local de Salud", "Ayuda / Atención inmediata", "Evolución", "Administración",
         ]
     elif current_profile == "Dirección":
         available_pages = [
             "Panel general", "Matriz", "Ficha de actividad", "Tareas",
-            "Calendario", "Red Local de Salud",
+            "Calendario", "Red Local de Salud", "Ayuda / Atención inmediata",
         ]
     elif current_profile in eje_profiles:
         available_pages = [
-            "Panel general", "Ficha de actividad", "Red Local de Salud",
+            "Panel general", "Ficha de actividad", "Red Local de Salud", "Ayuda / Atención inmediata",
         ]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de actividad", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de actividad", "Red Local de Salud", "Ayuda / Atención inmediata"]
 
     selected_page = render_navigation(available_pages)
 
@@ -4204,6 +4416,9 @@ def main() -> None:
             data_with_assignments = merge_assignments(data, assignments, contacts)
             data_with_assignments = clean_interface_dataframe(data_with_assignments)
         render_contacts(contacts, assignments, data_with_assignments, user_name, engine)
+
+    elif selected_page == "Ayuda / Atención inmediata":
+        render_help(filtered, engine)
 
     elif selected_page == "Evolución" and st.session_state.get("role") == "admin":
         with st.spinner("Cargando registro de evolución..."):
