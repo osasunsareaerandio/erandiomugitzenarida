@@ -303,12 +303,121 @@ def apply_brand_theme() -> None:
             text-decoration: underline;
         }}
 
-        /* Dataframes: blancos y legibles. */
-        div[data-testid="stDataFrame"] {{
+        /* Forzar interfaz clara también cuando el móvil/navegador usa modo oscuro. */
+        html, body, [data-testid="stAppViewContainer"], .stApp {{
+            color-scheme: light !important;
+            background-color: var(--brand-white) !important;
+        }}
+
+        /* Contenedores generales, formularios y bloques: nunca fondo negro. */
+        [data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stForm"],
+        [data-testid="stFileUploader"],
+        [data-testid="stFileUploaderDropzone"],
+        [data-testid="stExpander"],
+        [data-testid="stDataFrame"],
+        [data-testid="stDataEditor"] {{
+            background-color: var(--brand-white) !important;
+            color: var(--brand-navy) !important;
+        }}
+
+        /* Popovers (Ayuda, Eliminar persona, etc.): fondo claro corporativo. */
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] > div,
+        [data-baseweb="popover"] [role="dialog"],
+        [data-baseweb="popover"] > div > div {{
+            background-color: #F4FAFC !important;
+            color: #111827 !important;
+        }}
+
+        div[data-baseweb="popover"] p,
+        div[data-baseweb="popover"] span,
+        div[data-baseweb="popover"] label,
+        div[data-baseweb="popover"] div,
+        div[data-baseweb="popover"] a {{
+            color: #111827 !important;
+        }}
+
+        /* Inputs, selects y textareas: blanco + texto oscuro, incluidos los deshabilitados. */
+        input, textarea,
+        [data-baseweb="input"] > div,
+        [data-baseweb="textarea"] > div,
+        [data-baseweb="select"] > div {{
+            background-color: var(--brand-white) !important;
+            color: #111827 !important;
+            -webkit-text-fill-color: #111827 !important;
+        }}
+
+        input:disabled, textarea:disabled,
+        [data-baseweb="input"] input:disabled {{
+            background-color: var(--brand-white) !important;
+            color: #111827 !important;
+            -webkit-text-fill-color: #111827 !important;
+            opacity: 1 !important;
+        }}
+
+        /* File uploader / repositorio documental. */
+        [data-testid="stFileUploaderDropzone"] {{
+            border: 1px dashed rgba(28,48,84,.28) !important;
+            border-radius: .75rem !important;
+        }}
+        [data-testid="stFileUploaderDropzone"] *,
+        [data-testid="stFileUploader"] * {{
+            color: #111827 !important;
+        }}
+        [data-testid="stFileUploaderDropzone"] button {{
+            background: #EAF6FA !important;
+            color: #111827 !important;
+            border-color: rgba(28,48,84,.20) !important;
+        }}
+        [data-testid="stFileUploaderDropzone"] button * {{
+            color: #111827 !important;
+        }}
+
+        /* Dataframes y editores: blanco y legible también en móvil. */
+        div[data-testid="stDataFrame"],
+        div[data-testid="stDataEditor"] {{
             border: 1px solid var(--brand-line);
             border-radius: 0.75rem;
-            background: var(--brand-white);
+            background: var(--brand-white) !important;
             box-shadow: 0 1px 8px rgba(28, 48, 84, 0.035);
+            --gdg-bg-cell: #FFFFFF;
+            --gdg-bg-cell-medium: #F7F9FC;
+            --gdg-bg-header: #EAF6FA;
+            --gdg-text-dark: #111827;
+            --gdg-text-medium: #1C3054;
+            --gdg-border-color: rgba(28,48,84,.14);
+        }}
+        div[data-testid="stDataFrame"] *,
+        div[data-testid="stDataEditor"] * {{
+            color: #111827 !important;
+        }}
+
+        /* Tablas HTML estándar. */
+        table, thead, tbody, tr, th, td {{
+            background-color: var(--brand-white) !important;
+            color: #111827 !important;
+        }}
+        th {{
+            background-color: #EAF6FA !important;
+        }}
+
+        /* Ajustes específicos para pantallas pequeñas. */
+        @media (max-width: 768px) {{
+            .main .block-container {{
+                padding-left: .75rem !important;
+                padding-right: .75rem !important;
+            }}
+            div[data-testid="stHorizontalBlock"] {{
+                gap: .55rem !important;
+            }}
+            [data-testid="stDataFrame"], [data-testid="stDataEditor"] {{
+                background: #FFFFFF !important;
+            }}
+            [data-testid="stFileUploader"],
+            [data-testid="stFileUploaderDropzone"] {{
+                background: #FFFFFF !important;
+            }}
         }}
 
 
@@ -404,117 +513,6 @@ def apply_brand_theme() -> None:
             color: rgba(28, 48, 84, 0.72) !important;
             font-style: normal;
             font-weight: 600;
-        }}
-
-        /* Forzar tema claro también en componentes internos de Streamlit,
-           especialmente en móvil cuando el sistema está en modo oscuro. */
-        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"],
-        [data-testid="stMainBlockContainer"] {{
-            background: #FFFFFF !important;
-            color: #1C3054 !important;
-            color-scheme: light !important;
-        }}
-
-        /* Popovers / ayuda */
-        div[data-baseweb="popover"],
-        div[data-baseweb="popover"] > div,
-        [data-testid="stPopoverBody"],
-        [data-testid="stPopoverBody"] > div {{
-            background: #EAF6FA !important;
-            color: #111111 !important;
-            border-color: rgba(28,48,84,.16) !important;
-        }}
-        div[data-baseweb="popover"] *,
-        [data-testid="stPopoverBody"] * {{
-            color: #111111 !important;
-        }}
-        [data-testid="stPopoverBody"] a {{
-            color: #1C3054 !important;
-        }}
-
-        /* Contenedores, formularios, expanders y repositorio documental */
-        [data-testid="stVerticalBlockBorderWrapper"],
-        [data-testid="stVerticalBlockBorderWrapper"] > div,
-        [data-testid="stForm"],
-        [data-testid="stForm"] > div,
-        div[data-testid="stExpander"],
-        div[data-testid="stExpander"] details,
-        div[data-testid="stExpander"] summary,
-        [data-testid="stFileUploader"],
-        [data-testid="stFileUploader"] section,
-        [data-testid="stFileUploaderDropzone"],
-        [data-testid="stFileUploaderDropzone"] > div {{
-            background: #FFFFFF !important;
-            color: #111111 !important;
-        }}
-        [data-testid="stVerticalBlockBorderWrapper"] *,
-        [data-testid="stForm"] *,
-        div[data-testid="stExpander"] *,
-        [data-testid="stFileUploader"] * {{
-            color: #111111;
-        }}
-
-        /* Campos de entrada siempre claros. */
-        [data-testid="stTextInput"] input,
-        [data-testid="stTextArea"] textarea,
-        [data-testid="stNumberInput"] input,
-        [data-testid="stDateInput"] input,
-        [data-baseweb="select"] > div,
-        [data-baseweb="input"] > div {{
-            background: #FFFFFF !important;
-            color: #111111 !important;
-            -webkit-text-fill-color: #111111 !important;
-        }}
-        [data-testid="stTextInput"] input:disabled,
-        [data-testid="stTextArea"] textarea:disabled,
-        input:disabled, textarea:disabled {{
-            opacity: 1 !important;
-            background: #FFFFFF !important;
-            color: #111111 !important;
-            -webkit-text-fill-color: #111111 !important;
-            border: 1px solid rgba(28,48,84,.18) !important;
-        }}
-
-        /* Tablas y editores: marco y superficies siempre blancos. */
-        [data-testid="stDataFrame"],
-        [data-testid="stDataFrame"] > div,
-        [data-testid="stDataEditor"],
-        [data-testid="stDataEditor"] > div,
-        [data-testid="stTable"],
-        [data-testid="stTable"] > div {{
-            background: #FFFFFF !important;
-            color: #111111 !important;
-            color-scheme: light !important;
-        }}
-        [data-testid="stDataFrame"] canvas,
-        [data-testid="stDataEditor"] canvas {{
-            background: #FFFFFF !important;
-        }}
-
-        /* Alertas claras: evita bloques oscuros en móvil. */
-        div[data-testid="stAlert"],
-        div[data-testid="stAlert"] > div {{
-            background: #F5FAFC !important;
-            color: #111111 !important;
-        }}
-        div[data-testid="stAlert"] * {{ color: #111111 !important; }}
-
-        /* Responsive móvil: más aire y campos legibles. */
-        @media (max-width: 768px) {{
-            .main .block-container {{
-                padding-left: .75rem !important;
-                padding-right: .75rem !important;
-                padding-top: .65rem !important;
-            }}
-            [data-testid="stHorizontalBlock"] {{
-                gap: .55rem !important;
-            }}
-            [data-testid="stMetric"] {{
-                background: #FFFFFF !important;
-            }}
-            [data-testid="stMetric"] * {{
-                color: #111111 !important;
-            }}
         }}
 </style>
         """,
@@ -1903,7 +1901,6 @@ def render_session_bar() -> str:
         }
         .session-profile {font-weight: 750; color: #1C3054; font-size: .98rem;}
         .session-time {color: #5d6a7d; font-size: .91rem; margin-top: .15rem;}
-        .st-key-top_help [data-baseweb="popover"], .st-key-top_help [data-testid="stPopoverBody"] {background:#EAF6FA!important;color:#111!important;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1922,18 +1919,17 @@ def render_session_bar() -> str:
         )
 
     with help_col:
-        with st.container(key="top_help"):
-            with st.popover("❓ Ayuda", use_container_width=True):
-                st.markdown("**Atención y soporte**")
-                st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
-                st.markdown("📱 [669 805 544](tel:+34669805544)")
-                st.caption("Horario de atención: lunes a viernes, de 09:00 a 17:00.")
-                whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
-                whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
-                st.markdown(
-                    f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;padding:.65rem .8rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;margin-top:.55rem;">💬 Iniciar chat por WhatsApp</a>',
-                    unsafe_allow_html=True,
-                )
+        with st.popover("❓ Ayuda", use_container_width=True):
+            st.markdown("**Atención y soporte**")
+            st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
+            st.markdown("📱 [669 805 544](tel:+34669805544)")
+            st.caption("Horario de atención: lunes a viernes, de 09:00 a 17:00.")
+            whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
+            whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
+            st.markdown(
+                f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;padding:.65rem .8rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;margin-top:.55rem;">💬 Iniciar chat por WhatsApp</a>',
+                unsafe_allow_html=True,
+            )
 
     with logout_col:
         if st.button("Cerrar sesión", key="top_logout", use_container_width=True):
@@ -3922,15 +3918,16 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 label_visibility="collapsed",
             )
 
-            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
             left.markdown("**Medida**")
             medida_value = safe_text(row.get("Medida"))
-            medida_lines = max(2, min(8, (len(medida_value) // 45) + medida_value.count("\n") + 1))
+            medida_height = max(68, min(220, 52 + ((len(medida_value) // 42) + 1) * 22))
             medida_edit = right.text_area(
                 "Medida",
                 value=medida_value,
-                height=38 + (medida_lines * 24),
+                height=medida_height,
                 label_visibility="collapsed",
+                help="El campo se adapta para facilitar la lectura completa en móvil.",
             )
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
