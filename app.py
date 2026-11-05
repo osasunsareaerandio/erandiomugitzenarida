@@ -4198,74 +4198,30 @@ def send_help_request_email(payload: dict[str, Any]) -> None:
 
 
 def render_help(data: pd.DataFrame, engine: Engine) -> None:
-    now = madrid_now()
-    service_open = help_service_is_open(now)
     st.subheader("Ayuda / Atención inmediata")
-    if service_open:
-        st.success("Atención inmediata disponible · Horario: 09:00–17:00")
-    else:
-        st.info("Fuera del horario de atención inmediata. Puedes dejar tu solicitud y la revisaremos en el siguiente horario disponible (09:00–17:00).")
+    st.caption("Si necesitas ayuda con la aplicación o con el seguimiento del plan, puedes contactar directamente con nosotras.")
 
-    st.caption("Indica cómo podemos contactar contigo y describe brevemente qué necesitas.")
-
-    action_options = ["Sin actividad asociada"]
-    if data is not None and not data.empty:
-        action_options += data.apply(lambda row: f"{int(row['id_accion']):03d} - {safe_text(row['Título'])}", axis=1).tolist()
-
-    with st.form("help_request_form", clear_on_submit=True):
-        contact_name = st.text_input("Nombre, opcional")
-        c1, c2 = st.columns(2)
-        contact_email = c1.text_input("Email")
-        contact_phone = c2.text_input("Teléfono")
-        selected_action = st.selectbox("Actividad relacionada, opcional", action_options)
-        reason = st.text_area("Motivo de la petición de ayuda", height=140, placeholder="Describe brevemente el problema o la ayuda que necesitas")
-        submitted = st.form_submit_button("Enviar solicitud de ayuda", type="primary")
-
-    if submitted:
-        email_value = safe_text(contact_email)
-        phone_value = safe_text(contact_phone)
-        reason_value = safe_text(reason)
-        if not email_value and not phone_value:
-            st.error("Indica al menos un email o un teléfono de contacto.")
-        elif not reason_value:
-            st.error("Describe el motivo de la petición de ayuda.")
-        else:
-            action_id = None
-            action_title = ""
-            if selected_action != "Sin actividad asociada":
-                try:
-                    action_id = int(selected_action.split(" - ", 1)[0])
-                    action_title = selected_action.split(" - ", 1)[1]
-                except Exception:
-                    action_id = None
-                    action_title = selected_action
-            payload = {
-                "profile_name": st.session_state.get("profile_name", ""),
-                "scope": st.session_state.get("scope", ""),
-                "action_id": action_id,
-                "action_title": action_title,
-                "contact_name": contact_name,
-                "contact_email": email_value,
-                "contact_phone": phone_value,
-                "reason": reason_value,
-                "service_open": service_open,
-            }
-            save_help_request(engine, payload)
-            try:
-                send_help_request_email(payload)
-                st.success("Solicitud enviada. Hemos recibido el aviso por correo.")
-            except Exception as exc:
-                st.warning("La solicitud ha quedado registrada, pero no se pudo enviar el aviso por correo. Puedes usar WhatsApp para contacto inmediato.")
-                st.caption(f"Detalle técnico: {safe_text(exc)}")
+    st.markdown(
+        """
+        <div style="background:#ffffff;border:1px solid rgba(28,48,84,0.14);border-left:6px solid #32A4CF;border-radius:14px;padding:1rem 1.15rem;margin:.4rem 0 1rem 0;box-shadow:0 2px 10px rgba(28,48,84,.05);">
+            <div style="font-size:1.02rem;font-weight:750;color:#1C3054;margin-bottom:.8rem;">Contacto directo</div>
+            <div style="font-size:1rem;color:#1C3054;margin:.5rem 0;">✉️&nbsp;&nbsp;<a href="mailto:osasunsarea@erandio.eus" style="color:#1C3054!important;text-decoration:none;font-weight:650;">osasunsarea@erandio.eus</a></div>
+            <div style="font-size:1rem;color:#1C3054;margin:.5rem 0;">📱&nbsp;&nbsp;<a href="tel:+34669805544" style="color:#1C3054!important;text-decoration:none;font-weight:650;">669 805 544</a></div>
+            <div style="font-size:.95rem;color:#1C3054;margin-top:.9rem;padding-top:.75rem;border-top:1px solid rgba(28,48,84,.12);">
+                <strong>Horario de atención:</strong> lunes a viernes, de 09:00 a 17:00.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
     whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
     st.markdown(
-        f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:.65rem 1rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;">Contactar por WhatsApp</a>',
+        f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:.72rem 1.1rem;border-radius:.65rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;box-shadow:0 2px 8px rgba(28,48,84,.12);">💬 Iniciar chat por WhatsApp</a>',
         unsafe_allow_html=True,
     )
-    st.caption("El botón abre WhatsApp para contactar directamente con el servicio.")
-
+    st.caption("El botón abre una conversación de WhatsApp directamente con el servicio de atención.")
 
 def render_footer() -> None:
     st.markdown(
