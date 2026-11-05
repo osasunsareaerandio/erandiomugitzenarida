@@ -405,6 +405,117 @@ def apply_brand_theme() -> None:
             font-style: normal;
             font-weight: 600;
         }}
+
+        /* Forzar tema claro también en componentes internos de Streamlit,
+           especialmente en móvil cuando el sistema está en modo oscuro. */
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"] {{
+            background: #FFFFFF !important;
+            color: #1C3054 !important;
+            color-scheme: light !important;
+        }}
+
+        /* Popovers / ayuda */
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] > div,
+        [data-testid="stPopoverBody"],
+        [data-testid="stPopoverBody"] > div {{
+            background: #EAF6FA !important;
+            color: #111111 !important;
+            border-color: rgba(28,48,84,.16) !important;
+        }}
+        div[data-baseweb="popover"] *,
+        [data-testid="stPopoverBody"] * {{
+            color: #111111 !important;
+        }}
+        [data-testid="stPopoverBody"] a {{
+            color: #1C3054 !important;
+        }}
+
+        /* Contenedores, formularios, expanders y repositorio documental */
+        [data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stVerticalBlockBorderWrapper"] > div,
+        [data-testid="stForm"],
+        [data-testid="stForm"] > div,
+        div[data-testid="stExpander"],
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] summary,
+        [data-testid="stFileUploader"],
+        [data-testid="stFileUploader"] section,
+        [data-testid="stFileUploaderDropzone"],
+        [data-testid="stFileUploaderDropzone"] > div {{
+            background: #FFFFFF !important;
+            color: #111111 !important;
+        }}
+        [data-testid="stVerticalBlockBorderWrapper"] *,
+        [data-testid="stForm"] *,
+        div[data-testid="stExpander"] *,
+        [data-testid="stFileUploader"] * {{
+            color: #111111;
+        }}
+
+        /* Campos de entrada siempre claros. */
+        [data-testid="stTextInput"] input,
+        [data-testid="stTextArea"] textarea,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stDateInput"] input,
+        [data-baseweb="select"] > div,
+        [data-baseweb="input"] > div {{
+            background: #FFFFFF !important;
+            color: #111111 !important;
+            -webkit-text-fill-color: #111111 !important;
+        }}
+        [data-testid="stTextInput"] input:disabled,
+        [data-testid="stTextArea"] textarea:disabled,
+        input:disabled, textarea:disabled {{
+            opacity: 1 !important;
+            background: #FFFFFF !important;
+            color: #111111 !important;
+            -webkit-text-fill-color: #111111 !important;
+            border: 1px solid rgba(28,48,84,.18) !important;
+        }}
+
+        /* Tablas y editores: marco y superficies siempre blancos. */
+        [data-testid="stDataFrame"],
+        [data-testid="stDataFrame"] > div,
+        [data-testid="stDataEditor"],
+        [data-testid="stDataEditor"] > div,
+        [data-testid="stTable"],
+        [data-testid="stTable"] > div {{
+            background: #FFFFFF !important;
+            color: #111111 !important;
+            color-scheme: light !important;
+        }}
+        [data-testid="stDataFrame"] canvas,
+        [data-testid="stDataEditor"] canvas {{
+            background: #FFFFFF !important;
+        }}
+
+        /* Alertas claras: evita bloques oscuros en móvil. */
+        div[data-testid="stAlert"],
+        div[data-testid="stAlert"] > div {{
+            background: #F5FAFC !important;
+            color: #111111 !important;
+        }}
+        div[data-testid="stAlert"] * {{ color: #111111 !important; }}
+
+        /* Responsive móvil: más aire y campos legibles. */
+        @media (max-width: 768px) {{
+            .main .block-container {{
+                padding-left: .75rem !important;
+                padding-right: .75rem !important;
+                padding-top: .65rem !important;
+            }}
+            [data-testid="stHorizontalBlock"] {{
+                gap: .55rem !important;
+            }}
+            [data-testid="stMetric"] {{
+                background: #FFFFFF !important;
+            }}
+            [data-testid="stMetric"] * {{
+                color: #111111 !important;
+            }}
+        }}
 </style>
         """,
         unsafe_allow_html=True,
@@ -1792,6 +1903,7 @@ def render_session_bar() -> str:
         }
         .session-profile {font-weight: 750; color: #1C3054; font-size: .98rem;}
         .session-time {color: #5d6a7d; font-size: .91rem; margin-top: .15rem;}
+        .st-key-top_help [data-baseweb="popover"], .st-key-top_help [data-testid="stPopoverBody"] {background:#EAF6FA!important;color:#111!important;}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1810,17 +1922,18 @@ def render_session_bar() -> str:
         )
 
     with help_col:
-        with st.popover("❓ Ayuda", use_container_width=True):
-            st.markdown("**Atención y soporte**")
-            st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
-            st.markdown("📱 [669 805 544](tel:+34669805544)")
-            st.caption("Horario de atención: lunes a viernes, de 09:00 a 17:00.")
-            whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
-            whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
-            st.markdown(
-                f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;padding:.65rem .8rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;margin-top:.55rem;">💬 Iniciar chat por WhatsApp</a>',
-                unsafe_allow_html=True,
-            )
+        with st.container(key="top_help"):
+            with st.popover("❓ Ayuda", use_container_width=True):
+                st.markdown("**Atención y soporte**")
+                st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
+                st.markdown("📱 [669 805 544](tel:+34669805544)")
+                st.caption("Horario de atención: lunes a viernes, de 09:00 a 17:00.")
+                whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
+                whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
+                st.markdown(
+                    f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;padding:.65rem .8rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;margin-top:.55rem;">💬 Iniciar chat por WhatsApp</a>',
+                    unsafe_allow_html=True,
+                )
 
     with logout_col:
         if st.button("Cerrar sesión", key="top_logout", use_container_width=True):
@@ -3809,9 +3922,16 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 label_visibility="collapsed",
             )
 
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
             left.markdown("**Medida**")
-            medida_edit = right.text_input("Medida", value=safe_text(row.get("Medida")), label_visibility="collapsed")
+            medida_value = safe_text(row.get("Medida"))
+            medida_lines = max(2, min(8, (len(medida_value) // 45) + medida_value.count("\n") + 1))
+            medida_edit = right.text_area(
+                "Medida",
+                value=medida_value,
+                height=38 + (medida_lines * 24),
+                label_visibility="collapsed",
+            )
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
             left.markdown("**Agente promotor**")
