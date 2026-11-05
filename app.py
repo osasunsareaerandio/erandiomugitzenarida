@@ -38,6 +38,7 @@ CONTACT_COLUMNS = [
 ]
 
 STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
+ACTION_STATUS_OPTIONS = ["No iniciada", "Iniciada", "Completada", "No procede"]
 INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
 TASK_STATUS_OPTIONS = ["No iniciado", "En curso", "Completado", "Descartado"]
@@ -560,6 +561,7 @@ def init_db(_engine: Engine) -> None:
                 id_accion INTEGER PRIMARY KEY,
                 avance INTEGER NOT NULL DEFAULT 0,
                 estado_evaluacion TEXT NOT NULL DEFAULT 'Sin evaluar',
+                estado_actual TEXT,
                 cumplimiento_indicadores TEXT NOT NULL DEFAULT 'Sin evaluar',
                 valoracion_tecnica TEXT,
                 observaciones TEXT,
@@ -587,6 +589,7 @@ def init_db(_engine: Engine) -> None:
                 id_accion INTEGER NOT NULL,
                 avance INTEGER NOT NULL DEFAULT 0,
                 estado_evaluacion TEXT NOT NULL DEFAULT 'Sin evaluar',
+                estado_actual TEXT,
                 cumplimiento_indicadores TEXT NOT NULL DEFAULT 'Sin evaluar',
                 valoracion_tecnica TEXT,
                 observaciones TEXT,
@@ -792,6 +795,7 @@ def init_db(_engine: Engine) -> None:
         ))
     evaluation_extra_columns = {
         "updated_by": "TEXT",
+        "estado_actual": "TEXT",
         "link_promotora": "TEXT",
         "link_promotora_enviado": "INTEGER NOT NULL DEFAULT 0",
         "link_promotora_fecha": "TEXT",
@@ -823,7 +827,7 @@ def get_evaluations(_engine: Engine) -> pd.DataFrame:
         df = pd.read_sql_query(text("SELECT * FROM evaluations"), conn)
     if df.empty:
         return pd.DataFrame(columns=[
-            "id_accion", "avance", "estado_evaluacion", "cumplimiento_indicadores", "valoracion_tecnica",
+            "id_accion", "avance", "estado_evaluacion", "estado_actual", "cumplimiento_indicadores", "valoracion_tecnica",
             "observaciones", "responsable_seguimiento", "fecha_actualizacion", "evidencias", "riesgos",
             "proximos_pasos", "prioridad", "link_promotora", "link_promotora_enviado", "link_promotora_fecha",
             "link_participante", "link_participante_enviado", "link_participante_fecha", "updated_by", "updated_at",
@@ -839,7 +843,7 @@ def get_history(_engine: Engine) -> pd.DataFrame:
         df = pd.read_sql_query(text("SELECT * FROM evaluation_history ORDER BY updated_at ASC, id ASC"), conn)
     if df.empty:
         return pd.DataFrame(columns=[
-            "id", "id_accion", "avance", "estado_evaluacion", "cumplimiento_indicadores", "valoracion_tecnica",
+            "id", "id_accion", "avance", "estado_evaluacion", "estado_actual", "cumplimiento_indicadores", "valoracion_tecnica",
             "observaciones", "responsable_seguimiento", "fecha_actualizacion", "evidencias", "riesgos",
             "proximos_pasos", "prioridad", "updated_by", "updated_at",
         ])
@@ -1475,7 +1479,7 @@ def merge_matrix_evaluations(matrix: pd.DataFrame, evaluations: pd.DataFrame) ->
     if evaluations.empty:
         merged = matrix.copy()
         defaults = {
-            "avance": 0, "estado_evaluacion": "Sin evaluar", "cumplimiento_indicadores": "Sin evaluar",
+            "avance": 0, "estado_evaluacion": "Sin evaluar", "estado_actual": "", "cumplimiento_indicadores": "Sin evaluar",
             "valoracion_tecnica": "", "observaciones": "", "responsable_seguimiento": "",
             "fecha_actualizacion": "", "evidencias": "", "riesgos": "", "proximos_pasos": "",
             "prioridad": "Media", "link_promotora": "", "link_promotora_enviado": 0, "link_promotora_fecha": "",
@@ -1620,7 +1624,8 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             return st.multiselect(label, values, default=values)
 
         ambitos = multi_filter("Ámbito", "Ámbito")
-        estados = multi_filter("Estado", "Estado original")
+        estados_originales = multi_filter("Estado", "Estado original")
+        estados_actuales = multi_filter("estado_actual", "Estado actual")
         tipos = multi_filter("Tipo", "Tipo")
         promotores = multi_filter("Agente promotor", "Agente promotor")
         estado_eval = st.multiselect("Estado de evaluación", STATUS_OPTIONS, default=STATUS_OPTIONS)
@@ -1628,7 +1633,8 @@ def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     filtered = df[
         df["Ámbito"].isin(ambitos)
-        & df["Estado"].isin(estados)
+        & df["Estado"].isin(estados_originales)
+        & df["estado_actual"].isin(estados_actuales)
         & df["Tipo"].isin(tipos)
         & df["Agente promotor"].isin(promotores)
         & df["estado_evaluacion"].fillna("Sin evaluar").isin(estado_eval)
@@ -3070,19 +3076,24 @@ def render_dashboard(df: pd.DataFrame) -> None:
         chart_df["estado_evaluacion"].isin(STATUS_OPTIONS),
         "Sin evaluar",
     )
+    chart_df["estado_actual"] = chart_df["estado_actual"].apply(safe_text)
+    chart_df["estado_actual"] = chart_df["estado_actual"].where(
+        chart_df["estado_actual"].isin(ACTION_STATUS_OPTIONS),
+        "No iniciada",
+    )
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Acciones filtradas", len(chart_df))
-    col2.metric("Iniciadas", int((chart_df["estado_evaluacion"] == "Iniciado").sum()))
-    col3.metric("Completadas", int((chart_df["estado_evaluacion"] == "Completado").sum()))
-    col4.metric("Sin evaluar", int((chart_df["estado_evaluacion"] == "Sin evaluar").sum()))
+    col2.metric("Iniciadas", int((chart_df["estado_actual"] == "Iniciada").sum()))
+    col3.metric("Completadas", int((chart_df["estado_actual"] == "Completada").sum()))
+    col4.metric("No iniciadas", int((chart_df["estado_actual"] == "No iniciada").sum()))
 
     left, right = st.columns(2)
     with left:
-        st.subheader("Acciones por ámbito y estado")
+        st.subheader("Acciones por ámbito y estado actual")
         chart_data = (
             chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
-            .groupby(["Ámbito", "estado_evaluacion"], dropna=False)
+            .groupby(["Ámbito", "estado_actual"], dropna=False)
             .size()
             .reset_index(name="acciones")
         )
@@ -3091,15 +3102,15 @@ def render_dashboard(df: pd.DataFrame) -> None:
                 chart_data,
                 x="Ámbito",
                 y="acciones",
-                color="estado_evaluacion",
+                color="estado_actual",
                 text="acciones",
                 barmode="stack",
-                category_orders={"estado_evaluacion": STATUS_OPTIONS},
+                category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
                 color_discrete_sequence=BRAND_COLORS,
                 labels={
                     "Ámbito": "Ámbito",
                     "acciones": "Acciones",
-                    "estado_evaluacion": "Estado de evaluación",
+                    "estado_actual": "Estado actual",
                 },
             )
             fig.update_traces(textposition="inside")
@@ -3107,35 +3118,35 @@ def render_dashboard(df: pd.DataFrame) -> None:
         else:
             st.info("No hay datos suficientes para mostrar este gráfico.")
     with right:
-        st.subheader("Estado de evaluación")
+        st.subheader("Estado actual de las acciones")
         chart_data = (
-            chart_df[chart_df["estado_evaluacion"].astype(str).str.strip() != ""]
-            .groupby("estado_evaluacion", dropna=False)
+            chart_df[chart_df["estado_actual"].astype(str).str.strip() != ""]
+            .groupby("estado_actual", dropna=False)
             .size()
             .reset_index(name="acciones")
         )
-        chart_data = chart_data[chart_data["estado_evaluacion"].isin(STATUS_OPTIONS)]
+        chart_data = chart_data[chart_data["estado_actual"].isin(ACTION_STATUS_OPTIONS)]
         if not chart_data.empty:
             fig = px.pie(
                 chart_data,
-                names="estado_evaluacion",
+                names="estado_actual",
                 values="acciones",
-                category_orders={"estado_evaluacion": STATUS_OPTIONS},
+                category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
                 color_discrete_sequence=BRAND_COLORS,
-                labels={"estado_evaluacion": "Estado de evaluación", "acciones": "Acciones"},
+                labels={"estado_actual": "Estado actual", "acciones": "Acciones"},
             )
             st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
         else:
             st.info("No hay datos suficientes para mostrar este gráfico.")
 
     st.subheader("Acciones pendientes de completar")
-    columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
-    pending = chart_df[chart_df["estado_evaluacion"].isin(["Sin evaluar", "Iniciado"])]
-    st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_evaluacion", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
+    columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_actual", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
+    pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada"])]
+    st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_actual", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
-        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "Agente promotor", "Temporalidad",
+        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "estado_actual", "Agente promotor", "Temporalidad",
         "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
@@ -3343,7 +3354,7 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
         st.info("Todavía no hay modificaciones registradas. Cada vez que guardes una ficha de evaluación se añadirá una línea aquí.")
         return
 
-    meta_columns = ["id_accion", "Ámbito", "Título", "Tipo", "Estado"]
+    meta_columns = ["id_accion", "Ámbito", "Título", "Tipo"]
     history_meta = history.merge(all_data[meta_columns], on="id_accion", how="left")
     history_meta = history_meta[history_meta["id_accion"].isin(set(df["id_accion"].astype(int)))].copy()
     if history_meta.empty:
@@ -3371,6 +3382,7 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
         return text_value
 
     tracked_fields = [
+        ("estado_actual", "Estado actual"),
         ("estado_evaluacion", "Estado de evaluación"),
         ("cumplimiento_indicadores", "Cumplimiento de indicadores"),
         ("valoracion_tecnica", "Valoración técnica"),
@@ -3540,10 +3552,11 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     row = all_data[all_data["id_accion"] == selected_id].iloc[0]
 
     st.subheader(row["Título"])
-    meta1, meta2, meta3 = st.columns(3)
+    meta1, meta2, meta3, meta4 = st.columns(4)
     meta1.write(f"**Ámbito:** {row['Ámbito']}")
     meta2.write(f"**Tipo:** {row['Tipo']}")
-    meta3.write(f"**Estado original:** {row['Estado']}")
+    meta3.write(f"**Estado original:** {safe_text(row.get('Estado'))}")
+    meta4.write(f"**Estado actual:** {safe_text(row.get('estado_actual')) or 'No iniciada'}")
     personas_asignadas = safe_text(row.get("personas_red_asignadas"))
     if personas_asignadas:
         st.info(f"Personas de la Red Local asignadas: {personas_asignadas}")
@@ -3561,11 +3574,21 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         st.write("**Recursos:**")
         st.write(row.get("Recursos", ""))
 
+    current_estado_actual = safe_text(row.get("estado_actual")) or "No iniciada"
+    if current_estado_actual not in ACTION_STATUS_OPTIONS:
+        current_estado_actual = "No iniciada"
     current_estado = safe_text(row.get("estado_evaluacion")) or "Sin evaluar"
     current_cumplimiento = safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar"
     current_priority = safe_text(row.get("prioridad")) or "Media"
 
     with st.form("evaluation_form"):
+        st.markdown("### Seguimiento de la acción")
+        estado_actual = st.selectbox(
+            "Estado actual",
+            ACTION_STATUS_OPTIONS,
+            index=ACTION_STATUS_OPTIONS.index(current_estado_actual),
+            help="Indica el grado actual de ejecución de la acción. Este dato alimenta el Panel general.",
+        )
         st.markdown("### Evaluación")
         estado_evaluacion = st.selectbox("Estado de evaluación", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current_estado) if current_estado in STATUS_OPTIONS else 0)
         st.markdown("#### Cumplimiento de indicadores")
@@ -3641,6 +3664,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             "id_accion": selected_id,
             "avance": state_to_legacy_progress(estado_evaluacion),
             "estado_evaluacion": estado_evaluacion,
+            "estado_actual": estado_actual,
             "cumplimiento_indicadores": cumplimiento,
             "valoracion_tecnica": valoracion,
             "observaciones": observaciones,
@@ -3884,6 +3908,15 @@ def main() -> None:
     data = clean_interface_dataframe(data)
     data["avance"] = data.get("avance", pd.Series([0] * len(data))).fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
+    if "estado_actual" not in data.columns:
+        data["estado_actual"] = ""
+    # Estado original permanece exactamente como viene de la matriz.
+    # Estado actual es independiente y, si aún no se ha registrado, comienza en "No iniciada".
+    data["estado_actual"] = data["estado_actual"].fillna("").apply(safe_text)
+    data["estado_actual"] = data["estado_actual"].where(
+        data["estado_actual"].isin(ACTION_STATUS_OPTIONS),
+        "No iniciada",
+    )
     data["cumplimiento_indicadores"] = data["cumplimiento_indicadores"].fillna("Sin evaluar")
     data["prioridad"] = data["prioridad"].fillna("Media")
     for optional_col, default_value in {
