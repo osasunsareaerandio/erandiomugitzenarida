@@ -1769,96 +1769,81 @@ def authenticate(engine: Engine) -> bool:
     return False
 
 
-def sidebar_user() -> str:
-    with st.sidebar:
-        st.header("Sesión")
-        profile_name = st.session_state.get("profile_name", "Sin perfil")
-        role = st.session_state.get("role", "")
-        scope = st.session_state.get("scope", "")
-        st.write(f"**Perfil:** {profile_name}")
-        if role == "admin":
-            st.caption("Acceso de administración: todas las actividades, evolución y administración técnica.")
-        else:
-            st.caption("Perfil de eje: puede ver todas las actividades; las modificaciones quedan registradas con este perfil.")
-        if st.button("Cerrar sesión"):
+def render_session_bar() -> str:
+    """Cabecera de sesión: perfil, fecha/hora, ayuda y cierre de sesión."""
+    profile_name = safe_text(st.session_state.get("profile_name")) or "Sin perfil"
+    now = madrid_now()
+    weekday_names = {
+        0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves",
+        4: "Viernes", 5: "Sábado", 6: "Domingo",
+    }
+    day_name = weekday_names.get(now.weekday(), "")
+
+    st.markdown(
+        """
+        <style>
+        .session-strip {
+            background: #FFFFFF;
+            border: 1px solid rgba(28,48,84,.14);
+            border-radius: 14px;
+            padding: .72rem 1rem;
+            margin: .2rem 0 1rem 0;
+            box-shadow: 0 2px 8px rgba(28,48,84,.05);
+        }
+        .session-profile {font-weight: 750; color: #1C3054; font-size: .98rem;}
+        .session-time {color: #5d6a7d; font-size: .91rem; margin-top: .15rem;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    info_col, help_col, logout_col = st.columns([7, 1.45, 1.55], vertical_alignment="center")
+    with info_col:
+        st.markdown(
+            f"""
+            <div class="session-strip">
+                <div class="session-profile">Perfil activo: {html.escape(profile_name)}</div>
+                <div class="session-time">{day_name} · {now.strftime('%d/%m/%Y')} · {now.strftime('%H:%M')}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with help_col:
+        with st.popover("❓ Ayuda", use_container_width=True):
+            st.markdown("**Atención y soporte**")
+            st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
+            st.markdown("📱 [669 805 544](tel:+34669805544)")
+            st.caption("Horario de atención: lunes a viernes, de 09:00 a 17:00.")
+            whatsapp_text = "Hola, necesito ayuda con la aplicación Erandio Mugitzen ari da!."
+            whatsapp_url = "https://wa.me/34669805544?text=" + whatsapp_text.replace(" ", "%20").replace("!", "%21")
+            st.markdown(
+                f'<a href="{whatsapp_url}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;padding:.65rem .8rem;border-radius:.6rem;background:#1C3054;color:#fff!important;font-weight:700;text-decoration:none;margin-top:.55rem;">💬 Iniciar chat por WhatsApp</a>',
+                unsafe_allow_html=True,
+            )
+
+    with logout_col:
+        if st.button("Cerrar sesión", key="top_logout", use_container_width=True):
             st.session_state.clear()
             st.rerun()
+
     return str(st.session_state.get("user_name", profile_name)).strip()
 
 
 def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Filtra sin ocultar acciones por valores vacíos o nuevas categorías.
-
-    Cuando un filtro mantiene seleccionadas todas sus opciones, no se aplica
-    ninguna restricción sobre esa columna. Así, una acción nunca desaparece
-    simplemente porque tenga un valor vacío, nuevo o todavía no registrado.
-    """
+    """Sin filtros globales laterales; solo normaliza valores operativos."""
     working = df.copy()
-
-    # Valores operativos por defecto para campos que pueden venir vacíos.
-    working["Agente promotor"] = working["Agente promotor"].apply(safe_text).replace("", "Pendiente")
-    working["estado_actual"] = working["estado_actual"].apply(safe_text)
-    working["estado_actual"] = working["estado_actual"].where(
-        working["estado_actual"].isin(ACTION_STATUS_OPTIONS),
-        "No iniciada",
-    )
-    working["estado_evaluacion"] = working["estado_evaluacion"].apply(safe_text).replace("", "Sin evaluar")
-
-    filter_keys = [
-        "filter_ambito", "filter_estado_original", "filter_estado_actual",
-        "filter_tipo", "filter_promotor", "filter_estado_evaluacion", "filter_texto",
-    ]
-
-    with st.sidebar:
-        st.header("Filtros")
-        if st.button("Restablecer filtros", key="reset_action_filters", use_container_width=True):
-            for key in filter_keys:
-                st.session_state.pop(key, None)
-            st.rerun()
-
-        def multi_filter(column: str, label: str, key: str) -> tuple[list[str], list[str]]:
-            values = sorted({safe_text(v) for v in working[column].tolist() if safe_text(v)})
-            selected = st.multiselect(label, values, default=values, key=key)
-            return selected, values
-
-        ambitos, all_ambitos = multi_filter("Ámbito", "Ámbito", "filter_ambito")
-        estados_originales, all_estados_originales = multi_filter("Estado", "Estado original", "filter_estado_original")
-        estados_actuales, all_estados_actuales = multi_filter("estado_actual", "Estado actual", "filter_estado_actual")
-        tipos, all_tipos = multi_filter("Tipo", "Tipo", "filter_tipo")
-        promotores, all_promotores = multi_filter("Agente promotor", "Agente promotor", "filter_promotor")
-        estado_eval = st.multiselect(
-            "Estado de evaluación",
-            STATUS_OPTIONS,
-            default=STATUS_OPTIONS,
-            key="filter_estado_evaluacion",
+    if "Agente promotor" in working.columns:
+        working["Agente promotor"] = working["Agente promotor"].apply(safe_text).replace("", "Pendiente")
+    if "estado_actual" in working.columns:
+        working["estado_actual"] = working["estado_actual"].apply(safe_text)
+        working["estado_actual"] = working["estado_actual"].where(
+            working["estado_actual"].isin(ACTION_STATUS_OPTIONS),
+            "No iniciada",
         )
-        texto = st.text_input(
-            "Buscar texto",
-            placeholder="Título, descripción, indicadores...",
-            key="filter_texto",
-        )
-
-    mask = pd.Series(True, index=working.index)
-
-    # Si están seleccionadas todas las opciones, el filtro no restringe filas.
-    if set(ambitos) != set(all_ambitos):
-        mask &= working["Ámbito"].isin(ambitos)
-    if set(estados_originales) != set(all_estados_originales):
-        mask &= working["Estado"].isin(estados_originales)
-    if set(estados_actuales) != set(all_estados_actuales):
-        mask &= working["estado_actual"].isin(estados_actuales)
-    if set(tipos) != set(all_tipos):
-        mask &= working["Tipo"].isin(tipos)
-    if set(promotores) != set(all_promotores):
-        mask &= working["Agente promotor"].isin(promotores)
-    if set(estado_eval) != set(STATUS_OPTIONS):
-        mask &= working["estado_evaluacion"].isin(estado_eval)
-
-    filtered = working[mask].copy()
-    if texto:
-        haystack = filtered[["Título", "Descripción", "Indicadores", "Medida"]].fillna("").agg(" ".join, axis=1).str.lower()
-        filtered = filtered[haystack.str.contains(texto.lower(), regex=False)]
-    return filtered
+    if "estado_evaluacion" in working.columns:
+        working["estado_evaluacion"] = working["estado_evaluacion"].apply(safe_text).replace("", "Sin evaluar")
+    return working
 
 
 def apply_profile_scope(data: pd.DataFrame) -> pd.DataFrame:
@@ -4284,6 +4269,15 @@ def main() -> None:
     page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
     st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
     apply_brand_theme()
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: none !important;}
+        [data-testid="stSidebarCollapsedControl"] {display: none !important;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("""
     <style>
     .nav-helper {
@@ -4325,9 +4319,8 @@ def main() -> None:
         return
     init_db(engine)
 
-    render_sidebar_logo()
-    user_name = sidebar_user()
     render_internal_header()
+    user_name = render_session_bar()
 
     matrix = load_default_matrix()
     evaluations = clean_interface_dataframe(get_evaluations(engine))
@@ -4372,19 +4365,19 @@ def main() -> None:
     if current_role == "admin":
         available_pages = [
             "Panel general", "Matriz", "Ficha de actividad", "Nuevos Retos",
-            "Calendario", "Red Local de Salud", "Ayuda / Atención inmediata", "Evolución", "Administración",
+            "Calendario", "Red Local de Salud", "Evolución", "Administración",
         ]
     elif current_profile == "Dirección":
         available_pages = [
             "Panel general", "Matriz", "Ficha de actividad", "Tareas",
-            "Calendario", "Red Local de Salud", "Ayuda / Atención inmediata",
+            "Calendario", "Red Local de Salud",
         ]
     elif current_profile in eje_profiles:
         available_pages = [
-            "Panel general", "Ficha de actividad", "Red Local de Salud", "Ayuda / Atención inmediata",
+            "Panel general", "Ficha de actividad", "Red Local de Salud",
         ]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de actividad", "Red Local de Salud", "Ayuda / Atención inmediata"]
+        available_pages = ["Panel general", "Matriz", "Ficha de actividad", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
@@ -4418,8 +4411,6 @@ def main() -> None:
             data_with_assignments = clean_interface_dataframe(data_with_assignments)
         render_contacts(contacts, assignments, data_with_assignments, user_name, engine)
 
-    elif selected_page == "Ayuda / Atención inmediata":
-        render_help(filtered, engine)
 
     elif selected_page == "Evolución" and st.session_state.get("role") == "admin":
         with st.spinner("Cargando registro de evolución..."):
