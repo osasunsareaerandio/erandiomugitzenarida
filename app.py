@@ -3717,68 +3717,104 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     if current_estado_actual not in ACTION_STATUS_OPTIONS:
         current_estado_actual = "No iniciada"
 
-    activity_table = pd.DataFrame([{
-        "Título": safe_text(row.get("Título")),
-        "Ámbito": current_scope,
-        "Tipo": current_type,
-        "Estado original": safe_text(row.get("Estado")),
-        "Estado actual": current_estado_actual,
-        "Medida": safe_text(row.get("Medida")),
-        "Agente promotor": safe_text(row.get("Agente promotor")),
-        "Personas destinatarias": safe_text(row.get("Personas destinatarias")),
-        "Temporalidad": safe_text(row.get("Temporalidad")),
-        "Descripción": safe_text(row.get("Descripción")),
-        "Indicadores previstos": safe_text(row.get("Indicadores")),
-        "Recursos": safe_text(row.get("Recursos")),
-        "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
-    }])
+    with st.form(f"activity_info_form_{selected_id}"):
+        st.markdown("### Datos de la actividad")
+        st.caption("Actualiza la información de la actividad. El Estado original se conserva como dato de referencia y no puede modificarse.")
 
-    edited_activity = st.data_editor(
-        activity_table,
-        use_container_width=True,
-        hide_index=True,
-        height=128,
-        disabled=["Título", "Estado original"],
-        column_config={
-            "Título": st.column_config.TextColumn("Título", width="large"),
-            "Ámbito": st.column_config.SelectboxColumn("Ámbito", options=scope_options, required=True, width="medium"),
-            "Tipo": st.column_config.SelectboxColumn("Tipo", options=type_options, required=True, width="medium"),
-            "Estado original": st.column_config.TextColumn("Estado original", width="medium", help="Dato de la matriz original. No se puede modificar."),
-            "Estado actual": st.column_config.SelectboxColumn("Estado actual", options=ACTION_STATUS_OPTIONS, required=True, width="medium"),
-            "Medida": st.column_config.TextColumn("Medida", width="large"),
-            "Agente promotor": st.column_config.TextColumn("Agente promotor", width="large"),
-            "Personas destinatarias": st.column_config.TextColumn("Personas destinatarias", width="large"),
-            "Temporalidad": st.column_config.TextColumn("Temporalidad", width="medium"),
-            "Descripción": st.column_config.TextColumn("Descripción", width="large"),
-            "Indicadores previstos": st.column_config.TextColumn("Indicadores previstos", width="large"),
-            "Recursos": st.column_config.TextColumn("Recursos", width="large"),
-            "Responsable de seguimiento": st.column_config.TextColumn(
+        with st.container(border=True):
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Ámbito**")
+            ambito_edit = right.selectbox(
+                "Ámbito",
+                scope_options,
+                index=scope_options.index(current_scope) if current_scope in scope_options else 0,
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Tipo**")
+            tipo_edit = right.selectbox(
+                "Tipo",
+                type_options,
+                index=type_options.index(current_type) if current_type in type_options else 0,
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Estado original**")
+            right.text_input(
+                "Estado original",
+                value=safe_text(row.get("Estado")),
+                disabled=True,
+                label_visibility="collapsed",
+                help="Dato procedente de la matriz original. No se puede modificar.",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Estado actual**")
+            estado_actual_edit = right.selectbox(
+                "Estado actual",
+                ACTION_STATUS_OPTIONS,
+                index=ACTION_STATUS_OPTIONS.index(current_estado_actual),
+                label_visibility="collapsed",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Medida**")
+            medida_edit = right.text_input("Medida", value=safe_text(row.get("Medida")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Agente promotor**")
+            agente_edit = right.text_input("Agente promotor", value=safe_text(row.get("Agente promotor")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Personas destinatarias**")
+            destinatarias_edit = right.text_input("Personas destinatarias", value=safe_text(row.get("Personas destinatarias")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Temporalidad**")
+            temporalidad_edit = right.text_input("Temporalidad", value=safe_text(row.get("Temporalidad")), label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Descripción**")
+            descripcion_edit = right.text_area("Descripción", value=safe_text(row.get("Descripción")), height=110, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Indicadores previstos**")
+            indicadores_edit = right.text_area("Indicadores previstos", value=safe_text(row.get("Indicadores")), height=110, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
+            left.markdown("**Recursos**")
+            recursos_edit = right.text_area("Recursos", value=safe_text(row.get("Recursos")), height=90, label_visibility="collapsed")
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Responsable de seguimiento**")
+            responsable_edit = right.text_input(
                 "Responsable de seguimiento",
-                width="large",
-                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto."
-            ),
-        },
-        key=f"activity_info_editor_{selected_id}",
-    )
+                value=safe_text(row.get("responsable_seguimiento")),
+                label_visibility="collapsed",
+                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto.",
+            )
 
-    if st.button("Guardar información de la actividad", key=f"save_activity_info_{selected_id}", type="primary"):
+        save_activity = st.form_submit_button("Guardar información de la actividad", type="primary")
+
+    if save_activity:
         if not user_name:
             st.error("Antes de guardar, entra con un perfil identificado.")
         else:
-            edited_row = edited_activity.iloc[0]
             save_action_details(engine, {
                 "id_accion": selected_id,
-                "ambito": edited_row.get("Ámbito"),
-                "tipo": edited_row.get("Tipo"),
-                "medida": edited_row.get("Medida"),
-                "agente_promotor": edited_row.get("Agente promotor"),
-                "personas_destinatarias": edited_row.get("Personas destinatarias"),
-                "temporalidad": edited_row.get("Temporalidad"),
-                "descripcion": edited_row.get("Descripción"),
-                "indicadores": edited_row.get("Indicadores previstos"),
-                "recursos": edited_row.get("Recursos"),
-                "estado_actual": edited_row.get("Estado actual"),
-                "responsable_seguimiento": edited_row.get("Responsable de seguimiento"),
+                "ambito": ambito_edit,
+                "tipo": tipo_edit,
+                "medida": medida_edit,
+                "agente_promotor": agente_edit,
+                "personas_destinatarias": destinatarias_edit,
+                "temporalidad": temporalidad_edit,
+                "descripcion": descripcion_edit,
+                "indicadores": indicadores_edit,
+                "recursos": recursos_edit,
+                "estado_actual": estado_actual_edit,
+                "responsable_seguimiento": responsable_edit,
             }, user_name)
             st.success("Información de la actividad actualizada.")
             st.rerun()
