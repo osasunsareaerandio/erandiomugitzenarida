@@ -345,6 +345,35 @@ def apply_brand_theme() -> None:
             line-height: 1.35;
         }}
 
+        .st-key-action_selector_panel {{
+            background: linear-gradient(135deg, rgba(28, 48, 84, 0.97), rgba(50, 164, 207, 0.88));
+            border-left: 8px solid var(--brand-gold);
+            border-radius: 1rem;
+            padding: 1rem 1.15rem 1.15rem 1.15rem;
+            margin: 0.25rem 0 1rem 0;
+            box-shadow: 0 4px 16px rgba(28, 48, 84, 0.13);
+        }}
+        .st-key-action_selector_panel label p,
+        .st-key-action_selector_panel [data-testid="stCaptionContainer"] p {{
+            color: white !important;
+        }}
+        .st-key-tracking_evaluation_panel {{
+            background: rgba(174, 124, 170, 0.08);
+            border: 1px solid rgba(174, 124, 170, 0.35);
+            border-left: 7px solid var(--brand-mauve);
+            border-radius: 1rem;
+            padding: 1rem 1.1rem;
+            margin-top: 1rem;
+        }}
+        .tracking-evaluation-title {{
+            background: var(--brand-mauve);
+            color: white !important;
+            font-weight: 780;
+            border-radius: 0.7rem;
+            padding: 0.7rem 0.9rem;
+            margin-bottom: 0.9rem;
+        }}
+
         div[data-testid="stSelectbox"] label p {{
             font-weight: 700 !important;
         }}
@@ -409,7 +438,8 @@ def clear_data_caches() -> None:
     """Limpia caches de datos tras guardar cambios para que la interfaz vea datos actualizados."""
     for fn in [
         get_evaluations, get_history, get_action_contacts, get_activity_documents,
-        get_contacts, get_access_log, get_questionnaire_responses, get_calendar_events, load_contacts_and_assignments
+        get_contacts, get_access_log, get_questionnaire_responses, get_calendar_events, load_contacts_and_assignments,
+        get_action_details
     ]:
         try:
             fn.clear()
@@ -618,6 +648,26 @@ def init_db(_engine: Engine) -> None:
                 assigned_by TEXT,
                 assigned_at TEXT NOT NULL,
                 PRIMARY KEY (id_accion, contacto_id)
+            )
+            """
+        ))
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS action_details (
+                id_accion INTEGER PRIMARY KEY,
+                ambito TEXT,
+                tipo TEXT,
+                medida TEXT,
+                agente_promotor TEXT,
+                personas_destinatarias TEXT,
+                temporalidad TEXT,
+                descripcion TEXT,
+                indicadores TEXT,
+                recursos TEXT,
+                estado_actual TEXT,
+                responsable_seguimiento TEXT,
+                updated_by TEXT,
+                updated_at TEXT NOT NULL
             )
             """
         ))
@@ -962,6 +1012,107 @@ def delete_new_challenge(engine: Engine, challenge_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM new_challenges WHERE challenge_id = :challenge_id"), {"challenge_id": int(challenge_id)})
     clear_data_caches()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_action_details(_engine: Engine) -> pd.DataFrame:
+    engine = _engine
+    with engine.begin() as conn:
+        df = pd.read_sql_query(text("SELECT * FROM action_details ORDER BY id_accion ASC"), conn)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "id_accion", "ambito", "tipo", "medida", "agente_promotor", "personas_destinatarias",
+            "temporalidad", "descripcion", "indicadores", "recursos", "estado_actual",
+            "responsable_seguimiento", "updated_by", "updated_at",
+        ])
+    df["id_accion"] = pd.to_numeric(df["id_accion"], errors="coerce").fillna(0).astype(int)
+    return clean_interface_dataframe(df)
+
+
+def apply_action_details(data: pd.DataFrame, details: pd.DataFrame) -> pd.DataFrame:
+    """Superpone los datos editables guardados sobre la matriz original."""
+    if details is None or details.empty:
+        return data.copy()
+    result = data.copy()
+    field_map = {
+        "ambito": "Ámbito",
+        "tipo": "Tipo",
+        "medida": "Medida",
+        "agente_promotor": "Agente promotor",
+        "personas_destinatarias": "Personas destinatarias",
+        "temporalidad": "Temporalidad",
+        "descripcion": "Descripción",
+        "indicadores": "Indicadores",
+        "recursos": "Recursos",
+        "estado_actual": "estado_actual",
+        "responsable_seguimiento": "responsable_seguimiento",
+    }
+    by_id = {int(row["id_accion"]): row for _, row in details.iterrows() if int(row.get("id_accion", 0) or 0) > 0}
+    for idx, row in result.iterrows():
+        detail = by_id.get(int(row["id_accion"]))
+        if detail is None:
+            continue
+        for source_col, target_col in field_map.items():
+            value = safe_text(detail.get(source_col))
+            if value:
+                result.at[idx, target_col] = value
+    return result
+
+
+def ensure_responsible_contact(engine: Engine, responsible: str, user_name: str) -> None:
+    """Añade el responsable a la Red Local de Salud si todavía no existe."""
+    responsible = safe_text(responsible)
+    if not responsible:
+        return
+    contacts = get_contacts(engine)
+    if not contacts.empty:
+        existing = set(contacts["Persona"].fillna("").astype(str).str.strip().str.casefold())
+        existing |= set(contacts["Entidad"].fillna("").astype(str).str.strip().str.casefold())
+        if responsible.casefold() in existing:
+            return
+    add_contact(engine, {
+        "Categoria": "Responsable de seguimiento",
+        "Subcategoria": "",
+        "Comisión": "",
+        "Perfil": "",
+        "Entidad": "",
+        "Teléfono": "",
+        "Persona": responsible,
+        "Mail": "",
+    }, user_name)
+
+
+def save_action_details(engine: Engine, payload: dict[str, Any], user_name: str) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    data = {
+        "id_accion": int(payload["id_accion"]),
+        "ambito": safe_text(payload.get("ambito")),
+        "tipo": safe_text(payload.get("tipo")),
+        "medida": safe_text(payload.get("medida")),
+        "agente_promotor": safe_text(payload.get("agente_promotor")),
+        "personas_destinatarias": safe_text(payload.get("personas_destinatarias")),
+        "temporalidad": safe_text(payload.get("temporalidad")),
+        "descripcion": safe_text(payload.get("descripcion")),
+        "indicadores": safe_text(payload.get("indicadores")),
+        "recursos": safe_text(payload.get("recursos")),
+        "estado_actual": safe_text(payload.get("estado_actual")) or "No iniciada",
+        "responsable_seguimiento": safe_text(payload.get("responsable_seguimiento")),
+        "updated_by": safe_text(user_name),
+        "updated_at": now,
+    }
+    fields = list(data.keys())
+    updates = ", ".join([f"{field}=excluded.{field}" for field in fields if field != "id_accion"])
+    with engine.begin() as conn:
+        conn.execute(
+            text(f"""
+                INSERT INTO action_details ({", ".join(fields)})
+                VALUES ({", ".join([":" + field for field in fields])})
+                ON CONFLICT(id_accion) DO UPDATE SET {updates}
+            """),
+            data,
+        )
+    ensure_responsible_contact(engine, data["responsable_seguimiento"], user_name)
+    clear_data_caches()
+
 
 def save_action_contacts(engine: Engine, id_accion: int, contacto_ids: list[int], user_name: str) -> None:
     now = datetime.now().isoformat(timespec="seconds")
@@ -2069,7 +2220,7 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
                 pass
             candidates.append({
                 "reminder_key": f"derived:{task_key}:{due_date.isoformat()}",
-                "task_source": "Ficha de evaluación",
+                "task_source": "Ficha de actividad",
                 "task_identifier": task_key,
                 "id_accion": id_accion,
                 "accion_titulo": action_label,
@@ -2229,7 +2380,7 @@ def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.Dat
                 "fecha": date_value,
                 "hora": "",
                 "tipo": "Tarea",
-                "origen": "Ficha de evaluación",
+                "origen": "Ficha de actividad",
                 "titulo": safe_text(row.get("Id_acción + Título")),
                 "descripcion": safe_text(row.get("Próximos pasos")),
                 "responsable": safe_text(row.get("Responsable de seguimiento")),
@@ -2729,7 +2880,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
 
 def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Tareas")
-    st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de evaluación y tareas añadidas manualmente.")
+    st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de actividad y tareas añadidas manualmente.")
 
     contacts = get_contacts(engine)
     contact_options, _, _ = build_contact_option_map(contacts)
@@ -2737,9 +2888,9 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     action_tasks = apply_contact_labels_to_tasks(build_action_task_rows(data, overrides), contacts)
 
     st.markdown("### Tareas generadas desde Próximos pasos")
-    st.caption("Se nutren automáticamente del campo Próximos pasos de cada Ficha de evaluación. Puedes completar descripción, vencimiento y estado.")
+    st.caption("Se nutren automáticamente del campo Próximos pasos de cada Ficha de actividad. Puedes completar descripción, vencimiento y estado.")
     if action_tasks.empty:
-        st.info("Todavía no hay próximos pasos registrados en las fichas de evaluación.")
+        st.info("Todavía no hay próximos pasos registrados en las fichas de actividad.")
     else:
         edited_action_tasks = st.data_editor(
             action_tasks,
@@ -2870,7 +3021,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     combined = []
     if not action_tasks.empty:
         derived = action_tasks.copy()
-        derived["Origen"] = "Ficha de evaluación"
+        derived["Origen"] = "Ficha de actividad"
         combined.append(derived[["Origen", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado"]])
     if not manual_tasks.empty:
         manual_export = visible_manual.rename(columns={
@@ -3528,165 +3679,232 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     if df.empty:
         st.info("No hay acciones para los filtros seleccionados.")
         return
+
     options = df.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
-    st.markdown(
-        """
-        <div class="action-selector-card">
-            <div class="action-selector-eyebrow">Ficha de evaluación</div>
-            <div class="action-selector-title">Selecciona una acción</div>
-            <div class="action-selector-help">Elige la actividad que quieres consultar, actualizar o evaluar.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.container(border=True):
-        st.markdown("#### Selecciona la actividad que quieres evaluar")
-        st.caption("El desplegable muestra únicamente las actividades disponibles para tu perfil.")
+    with st.container(key="action_selector_panel"):
+        st.markdown('<div class="action-selector-eyebrow">Ficha de actividad</div>', unsafe_allow_html=True)
+        st.markdown('<div class="action-selector-title">Selecciona una acción</div>', unsafe_allow_html=True)
+        st.markdown('<div class="action-selector-help">Elige la actividad que quieres consultar, actualizar o evaluar.</div>', unsafe_allow_html=True)
         selected = st.selectbox(
             "Actividad",
             options,
             key="action_detail_selector",
-            label_visibility="visible",
+            label_visibility="collapsed",
         )
+
     selected_id = int(selected.split(" - ")[0])
-    row = all_data[all_data["id_accion"] == selected_id].iloc[0]
+    selected_rows = all_data[all_data["id_accion"] == selected_id]
+    if selected_rows.empty:
+        st.warning("La acción seleccionada no está disponible para este perfil.")
+        return
+    row = selected_rows.iloc[0]
 
-    st.subheader(row["Título"])
-    meta1, meta2, meta3, meta4 = st.columns(4)
-    meta1.write(f"**Ámbito:** {row['Ámbito']}")
-    meta2.write(f"**Tipo:** {row['Tipo']}")
-    meta3.write(f"**Estado original:** {safe_text(row.get('Estado'))}")
-    meta4.write(f"**Estado actual:** {safe_text(row.get('estado_actual')) or 'No iniciada'}")
-    personas_asignadas = safe_text(row.get("personas_red_asignadas"))
-    if personas_asignadas:
-        st.info(f"Personas de la Red Local asignadas: {personas_asignadas}")
+    st.subheader(safe_text(row.get("Título")))
+    st.caption("Información general de la actividad. Los campos editables se guardan en la base de datos; Estado original permanece bloqueado.")
 
-    with st.expander("Información de la acción", expanded=True):
-        st.write(f"**Medida:** {row.get('Medida', '')}")
-        st.write(f"**Agente promotor:** {row.get('Agente promotor', '')}")
-        st.write(f"**Personas destinatarias:** {row.get('Personas destinatarias', '')}")
-        st.write(f"**Temporalidad:** {row.get('Temporalidad', '')}")
-        st.write("**Descripción:**")
-        st.write(row.get("Descripción", ""))
-        st.write("**Indicadores previstos en la matriz:**")
-        indicadores_matriz = safe_text(row.get("Indicadores", ""))
-        st.info(indicadores_matriz or "Esta acción no tiene indicadores definidos en la matriz.")
-        st.write("**Recursos:**")
-        st.write(row.get("Recursos", ""))
+    scope_options = sorted({safe_text(value) for value in all_data["Ámbito"].tolist() if safe_text(value)})
+    type_options = sorted({safe_text(value) for value in all_data["Tipo"].tolist() if safe_text(value)})
+    current_scope = safe_text(row.get("Ámbito"))
+    current_type = safe_text(row.get("Tipo"))
+    if current_scope and current_scope not in scope_options:
+        scope_options.append(current_scope)
+        scope_options = sorted(scope_options)
+    if current_type and current_type not in type_options:
+        type_options.append(current_type)
+        type_options = sorted(type_options)
 
     current_estado_actual = safe_text(row.get("estado_actual")) or "No iniciada"
     if current_estado_actual not in ACTION_STATUS_OPTIONS:
         current_estado_actual = "No iniciada"
+
+    activity_table = pd.DataFrame([{
+        "Título": safe_text(row.get("Título")),
+        "Ámbito": current_scope,
+        "Tipo": current_type,
+        "Estado original": safe_text(row.get("Estado")),
+        "Estado actual": current_estado_actual,
+        "Medida": safe_text(row.get("Medida")),
+        "Agente promotor": safe_text(row.get("Agente promotor")),
+        "Personas destinatarias": safe_text(row.get("Personas destinatarias")),
+        "Temporalidad": safe_text(row.get("Temporalidad")),
+        "Descripción": safe_text(row.get("Descripción")),
+        "Indicadores previstos": safe_text(row.get("Indicadores")),
+        "Recursos": safe_text(row.get("Recursos")),
+        "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
+    }])
+
+    edited_activity = st.data_editor(
+        activity_table,
+        use_container_width=True,
+        hide_index=True,
+        height=128,
+        disabled=["Título", "Estado original"],
+        column_config={
+            "Título": st.column_config.TextColumn("Título", width="large"),
+            "Ámbito": st.column_config.SelectboxColumn("Ámbito", options=scope_options, required=True, width="medium"),
+            "Tipo": st.column_config.SelectboxColumn("Tipo", options=type_options, required=True, width="medium"),
+            "Estado original": st.column_config.TextColumn("Estado original", width="medium", help="Dato de la matriz original. No se puede modificar."),
+            "Estado actual": st.column_config.SelectboxColumn("Estado actual", options=ACTION_STATUS_OPTIONS, required=True, width="medium"),
+            "Medida": st.column_config.TextColumn("Medida", width="large"),
+            "Agente promotor": st.column_config.TextColumn("Agente promotor", width="large"),
+            "Personas destinatarias": st.column_config.TextColumn("Personas destinatarias", width="large"),
+            "Temporalidad": st.column_config.TextColumn("Temporalidad", width="medium"),
+            "Descripción": st.column_config.TextColumn("Descripción", width="large"),
+            "Indicadores previstos": st.column_config.TextColumn("Indicadores previstos", width="large"),
+            "Recursos": st.column_config.TextColumn("Recursos", width="large"),
+            "Responsable de seguimiento": st.column_config.TextColumn(
+                "Responsable de seguimiento",
+                width="large",
+                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto."
+            ),
+        },
+        key=f"activity_info_editor_{selected_id}",
+    )
+
+    if st.button("Guardar información de la actividad", key=f"save_activity_info_{selected_id}", type="primary"):
+        if not user_name:
+            st.error("Antes de guardar, entra con un perfil identificado.")
+        else:
+            edited_row = edited_activity.iloc[0]
+            save_action_details(engine, {
+                "id_accion": selected_id,
+                "ambito": edited_row.get("Ámbito"),
+                "tipo": edited_row.get("Tipo"),
+                "medida": edited_row.get("Medida"),
+                "agente_promotor": edited_row.get("Agente promotor"),
+                "personas_destinatarias": edited_row.get("Personas destinatarias"),
+                "temporalidad": edited_row.get("Temporalidad"),
+                "descripcion": edited_row.get("Descripción"),
+                "indicadores": edited_row.get("Indicadores previstos"),
+                "recursos": edited_row.get("Recursos"),
+                "estado_actual": edited_row.get("Estado actual"),
+                "responsable_seguimiento": edited_row.get("Responsable de seguimiento"),
+            }, user_name)
+            st.success("Información de la actividad actualizada.")
+            st.rerun()
+
+    indicadores_matriz = safe_text(row.get("Indicadores", ""))
     current_estado = safe_text(row.get("estado_evaluacion")) or "Sin evaluar"
     current_cumplimiento = safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar"
     current_priority = safe_text(row.get("prioridad")) or "Media"
+    responsable = safe_text(row.get("responsable_seguimiento"))
 
-    with st.form("evaluation_form"):
-        st.markdown("### Seguimiento de la acción")
-        estado_actual = st.selectbox(
-            "Estado actual",
-            ACTION_STATUS_OPTIONS,
-            index=ACTION_STATUS_OPTIONS.index(current_estado_actual),
-            help="Indica el grado actual de ejecución de la acción. Este dato alimenta el Panel general.",
-        )
-        st.markdown("### Evaluación")
-        estado_evaluacion = st.selectbox("Estado de evaluación", STATUS_OPTIONS, index=STATUS_OPTIONS.index(current_estado) if current_estado in STATUS_OPTIONS else 0)
-        st.markdown("#### Cumplimiento de indicadores")
-        st.caption("Indicadores definidos en la matriz")
-        st.info(indicadores_matriz or "Sin indicadores definidos en la matriz.")
-        cumplimiento = st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, index=INDICATOR_OPTIONS.index(current_cumplimiento) if current_cumplimiento in INDICATOR_OPTIONS else 0)
-
-        prioridad = st.selectbox("Prioridad", PRIORITY_OPTIONS, index=PRIORITY_OPTIONS.index(current_priority) if current_priority in PRIORITY_OPTIONS else 1)
-        responsable = st.text_input("Responsable de seguimiento", value=safe_text(row.get("responsable_seguimiento")))
-        fecha_value = safe_text(row.get("fecha_actualizacion"))
-        try:
-            parsed_date = datetime.fromisoformat(fecha_value).date() if fecha_value else date.today()
-        except ValueError:
-            parsed_date = date.today()
-        fecha_actualizacion = st.date_input("Fecha de actualización", value=parsed_date)
-        valoracion = st.text_area("Valoración técnica", value=safe_text(row.get("valoracion_tecnica")), height=100)
-        observaciones = st.text_area("Observaciones", value=safe_text(row.get("observaciones")), height=100)
-        riesgos = st.text_area("Riesgos / bloqueos", value=safe_text(row.get("riesgos")), height=80)
-        proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
-
-        st.markdown("### Links de evaluación")
-        st.caption("La aplicación genera enlaces propios de cuestionario. Usa los botones para abrirlos y el desplegable para copiar el enlace cuando tengas que enviarlo.")
-        generated_promotora = build_questionnaire_link(selected_id, "promotora")
-        generated_participante = build_questionnaire_link(selected_id, "participante")
-        current_link_promotora = safe_text(row.get("link_promotora")) or generated_promotora
-        current_link_participante = safe_text(row.get("link_participante")) or generated_participante
-
-        l1, l2 = st.columns(2)
-        with l1:
-            render_questionnaire_link_card(
-                "Persona Promotora",
-                current_link_promotora,
-                "Formulario para la entidad o persona que promueve o coordina la actividad.",
+    with st.container(key="tracking_evaluation_panel"):
+        st.markdown('<div class="tracking-evaluation-title">Seguimiento de la acción y evaluación</div>', unsafe_allow_html=True)
+        with st.form("evaluation_form"):
+            estado_evaluacion = st.selectbox(
+                "Estado de evaluación",
+                STATUS_OPTIONS,
+                index=STATUS_OPTIONS.index(current_estado) if current_estado in STATUS_OPTIONS else 0,
             )
-            link_promotora = st.text_input(
-                "Enlace guardado - Persona Promotora",
-                value=current_link_promotora,
-                help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
+            st.markdown("#### Cumplimiento de indicadores")
+            st.caption("Indicadores previstos para esta actividad")
+            st.info(indicadores_matriz or "Sin indicadores definidos.")
+            cumplimiento = st.selectbox(
+                "Valoración del cumplimiento",
+                INDICATOR_OPTIONS,
+                index=INDICATOR_OPTIONS.index(current_cumplimiento) if current_cumplimiento in INDICATOR_OPTIONS else 0,
             )
-            link_promotora_enviado = st.checkbox("Enviado a Persona Promotora", value=bool(row.get("link_promotora_enviado") or False))
-            promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
+            prioridad = st.selectbox(
+                "Prioridad",
+                PRIORITY_OPTIONS,
+                index=PRIORITY_OPTIONS.index(current_priority) if current_priority in PRIORITY_OPTIONS else 1,
+            )
+            fecha_value = safe_text(row.get("fecha_actualizacion"))
             try:
-                promotora_date = datetime.fromisoformat(promotora_fecha_value).date() if promotora_fecha_value else date.today()
+                parsed_date = datetime.fromisoformat(fecha_value).date() if fecha_value else date.today()
             except ValueError:
-                promotora_date = date.today()
-            link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
-        with l2:
-            render_questionnaire_link_card(
-                "Persona participante",
-                current_link_participante,
-                "Formulario para las personas que han participado o se han apuntado a la actividad.",
-            )
-            link_participante = st.text_input(
-                "Enlace guardado - Persona participante",
-                value=current_link_participante,
-                help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
-            )
-            link_participante_enviado = st.checkbox("Enviado a Persona participante", value=bool(row.get("link_participante_enviado") or False))
-            participante_fecha_value = safe_text(row.get("link_participante_fecha"))
-            try:
-                participante_date = datetime.fromisoformat(participante_fecha_value).date() if participante_fecha_value else date.today()
-            except ValueError:
-                participante_date = date.today()
-            link_participante_fecha = st.date_input("Fecha de envío a Persona participante", value=participante_date)
+                parsed_date = date.today()
+            fecha_actualizacion = st.date_input("Fecha de actualización", value=parsed_date)
+            valoracion = st.text_area("Valoración técnica", value=safe_text(row.get("valoracion_tecnica")), height=100)
+            observaciones = st.text_area("Observaciones", value=safe_text(row.get("observaciones")), height=100)
+            riesgos = st.text_area("Riesgos / bloqueos", value=safe_text(row.get("riesgos")), height=80)
+            proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
 
-        submitted = st.form_submit_button("Guardar evaluación")
+            st.markdown("### Links de evaluación")
+            st.caption("La aplicación genera enlaces propios de cuestionario para recoger valoraciones externas.")
+            generated_promotora = build_questionnaire_link(selected_id, "promotora")
+            generated_participante = build_questionnaire_link(selected_id, "participante")
+            current_link_promotora = safe_text(row.get("link_promotora")) or generated_promotora
+            current_link_participante = safe_text(row.get("link_participante")) or generated_participante
 
-    if submitted:
-        if not user_name:
-            st.error("Antes de guardar, escribe tu nombre en la barra lateral.")
-            return
-        save_evaluation(engine, {
-            "id_accion": selected_id,
-            "avance": state_to_legacy_progress(estado_evaluacion),
-            "estado_evaluacion": estado_evaluacion,
-            "estado_actual": estado_actual,
-            "cumplimiento_indicadores": cumplimiento,
-            "valoracion_tecnica": valoracion,
-            "observaciones": observaciones,
-            "responsable_seguimiento": responsable,
-            "fecha_actualizacion": fecha_actualizacion.isoformat(),
-            "evidencias": "",
-            "riesgos": riesgos,
-            "proximos_pasos": proximos_pasos,
-            "prioridad": prioridad,
-            "link_promotora": link_promotora,
-            "link_promotora_enviado": int(link_promotora_enviado),
-            "link_promotora_fecha": link_promotora_fecha.isoformat() if link_promotora_enviado else "",
-            "link_participante": link_participante,
-            "link_participante_enviado": int(link_participante_enviado),
-            "link_participante_fecha": link_participante_fecha.isoformat() if link_participante_enviado else "",
-            "updated_by": user_name,
-        })
-        st.success("Evaluación guardada y añadida al histórico.")
-        st.rerun()
+            l1, l2 = st.columns(2)
+            with l1:
+                render_questionnaire_link_card(
+                    "Persona Promotora",
+                    current_link_promotora,
+                    "Formulario para la entidad o persona que promueve o coordina la actividad.",
+                )
+                link_promotora = st.text_input(
+                    "Enlace guardado - Persona Promotora",
+                    value=current_link_promotora,
+                    help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
+                )
+                link_promotora_enviado = st.checkbox(
+                    "Enviado a Persona Promotora",
+                    value=bool(row.get("link_promotora_enviado") or False),
+                )
+                promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
+                try:
+                    promotora_date = datetime.fromisoformat(promotora_fecha_value).date() if promotora_fecha_value else date.today()
+                except ValueError:
+                    promotora_date = date.today()
+                link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
+            with l2:
+                render_questionnaire_link_card(
+                    "Persona participante",
+                    current_link_participante,
+                    "Formulario para las personas que han participado o se han apuntado a la actividad.",
+                )
+                link_participante = st.text_input(
+                    "Enlace guardado - Persona participante",
+                    value=current_link_participante,
+                    help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
+                )
+                link_participante_enviado = st.checkbox(
+                    "Enviado a Persona participante",
+                    value=bool(row.get("link_participante_enviado") or False),
+                )
+                participante_fecha_value = safe_text(row.get("link_participante_fecha"))
+                try:
+                    participante_date = datetime.fromisoformat(participante_fecha_value).date() if participante_fecha_value else date.today()
+                except ValueError:
+                    participante_date = date.today()
+                link_participante_fecha = st.date_input("Fecha de envío a Persona participante", value=participante_date)
+
+            submitted = st.form_submit_button("Guardar seguimiento y evaluación")
+
+        if submitted:
+            if not user_name:
+                st.error("Antes de guardar, entra con un perfil identificado.")
+                return
+            save_evaluation(engine, {
+                "id_accion": selected_id,
+                "avance": state_to_legacy_progress(estado_evaluacion),
+                "estado_evaluacion": estado_evaluacion,
+                "estado_actual": current_estado_actual,
+                "cumplimiento_indicadores": cumplimiento,
+                "valoracion_tecnica": valoracion,
+                "observaciones": observaciones,
+                "responsable_seguimiento": responsable,
+                "fecha_actualizacion": fecha_actualizacion.isoformat(),
+                "evidencias": "",
+                "riesgos": riesgos,
+                "proximos_pasos": proximos_pasos,
+                "prioridad": prioridad,
+                "link_promotora": link_promotora,
+                "link_promotora_enviado": int(link_promotora_enviado),
+                "link_promotora_fecha": link_promotora_fecha.isoformat() if link_promotora_enviado else "",
+                "link_participante": link_participante,
+                "link_participante_enviado": int(link_participante_enviado),
+                "link_participante_fecha": link_participante_fecha.isoformat() if link_participante_enviado else "",
+                "updated_by": user_name,
+            })
+            st.success("Seguimiento y evaluación guardados y añadidos al histórico.")
+            st.rerun()
 
     st.markdown("### Repositorio documental de la actividad")
-    st.caption("Sube imágenes, actas, documentos o evidencias vinculadas a esta acción. Los archivos se guardan en la base de datos de la aplicación.")
+    st.caption("Sube imágenes, actas, documentos o evidencias vinculadas a esta acción.")
     uploaded_docs = st.file_uploader(
         "Añadir imágenes o documentos",
         type=["pdf", "doc", "docx", "xls", "xlsx", "png", "jpg", "jpeg", "webp", "txt"],
@@ -3696,7 +3914,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     doc_notes = st.text_input("Nota para los archivos", key=f"activity_docs_notes_{selected_id}")
     if st.button("Guardar documentos", key=f"save_activity_docs_{selected_id}"):
         if not user_name:
-            st.error("Antes de subir documentos, escribe tu nombre en la barra lateral.")
+            st.error("Antes de subir documentos, entra con un perfil identificado.")
         elif not uploaded_docs:
             st.error("Selecciona al menos un archivo.")
         else:
@@ -3723,20 +3941,16 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                     data=raw,
                     file_name=safe_text(doc.get("filename")) or "documento",
                     mime=safe_text(doc.get("mime_type")) or "application/octet-stream",
-                    key=f"download_doc_{int(doc['document_id'])}",
+                    key=f"download_doc_{int(doc.get('document_id'))}",
                 )
                 with c3:
-                    if st.button("Eliminar", key=f"delete_doc_{int(doc['document_id'])}"):
-                        delete_activity_document(engine, int(doc["document_id"]))
-                        st.success("Documento eliminado.")
+                    if st.button("Eliminar", key=f"delete_doc_{int(doc.get('document_id'))}"):
+                        delete_activity_document(engine, int(doc.get("document_id")))
                         st.rerun()
 
-
-    if st.session_state.get("role") == "admin":
-        render_questionnaire_results(engine, selected_id)
+    render_questionnaire_results(engine, selected_id)
 
 
-@st.cache_data(ttl=120, show_spinner=False)
 def get_task_email_reminders(_engine: Engine) -> pd.DataFrame:
     engine = _engine
     try:
@@ -3905,6 +4119,8 @@ def main() -> None:
     matrix = load_default_matrix()
     evaluations = clean_interface_dataframe(get_evaluations(engine))
     data = merge_matrix_evaluations(matrix, evaluations)
+    action_details = get_action_details(engine)
+    data = apply_action_details(data, action_details)
     data = clean_interface_dataframe(data)
     data["avance"] = data.get("avance", pd.Series([0] * len(data))).fillna(0).astype(int)
     data["estado_evaluacion"] = data["estado_evaluacion"].fillna("Sin evaluar")
@@ -3942,20 +4158,20 @@ def main() -> None:
 
     if current_role == "admin":
         available_pages = [
-            "Panel general", "Matriz", "Ficha de evaluación", "Nuevos Retos",
+            "Panel general", "Matriz", "Ficha de actividad", "Nuevos Retos",
             "Calendario", "Red Local de Salud", "Evolución", "Administración",
         ]
     elif current_profile == "Dirección":
         available_pages = [
-            "Panel general", "Matriz", "Ficha de evaluación", "Tareas",
+            "Panel general", "Matriz", "Ficha de actividad", "Tareas",
             "Calendario", "Red Local de Salud",
         ]
     elif current_profile in eje_profiles:
         available_pages = [
-            "Panel general", "Ficha de evaluación", "Red Local de Salud",
+            "Panel general", "Ficha de actividad", "Red Local de Salud",
         ]
     else:
-        available_pages = ["Panel general", "Matriz", "Ficha de evaluación", "Red Local de Salud"]
+        available_pages = ["Panel general", "Matriz", "Ficha de actividad", "Red Local de Salud"]
 
     selected_page = render_navigation(available_pages)
 
@@ -3970,7 +4186,7 @@ def main() -> None:
             filtered_with_assignments = data_with_assignments[data_with_assignments["id_accion"].isin(filtered["id_accion"])].copy()
         render_matrix(filtered_with_assignments, data_with_assignments, contacts, assignments, user_name, engine)
 
-    elif selected_page == "Ficha de evaluación":
+    elif selected_page == "Ficha de actividad":
         render_action_detail(filtered, data, user_name, engine)
 
     elif selected_page == "Nuevos Retos":
