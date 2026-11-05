@@ -1787,29 +1787,74 @@ def sidebar_user() -> str:
 
 
 def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Filtra sin ocultar acciones por valores vacíos o nuevas categorías.
+
+    Cuando un filtro mantiene seleccionadas todas sus opciones, no se aplica
+    ninguna restricción sobre esa columna. Así, una acción nunca desaparece
+    simplemente porque tenga un valor vacío, nuevo o todavía no registrado.
+    """
+    working = df.copy()
+
+    # Valores operativos por defecto para campos que pueden venir vacíos.
+    working["Agente promotor"] = working["Agente promotor"].apply(safe_text).replace("", "Pendiente")
+    working["estado_actual"] = working["estado_actual"].apply(safe_text)
+    working["estado_actual"] = working["estado_actual"].where(
+        working["estado_actual"].isin(ACTION_STATUS_OPTIONS),
+        "No iniciada",
+    )
+    working["estado_evaluacion"] = working["estado_evaluacion"].apply(safe_text).replace("", "Sin evaluar")
+
+    filter_keys = [
+        "filter_ambito", "filter_estado_original", "filter_estado_actual",
+        "filter_tipo", "filter_promotor", "filter_estado_evaluacion", "filter_texto",
+    ]
+
     with st.sidebar:
         st.header("Filtros")
+        if st.button("Restablecer filtros", key="reset_action_filters", use_container_width=True):
+            for key in filter_keys:
+                st.session_state.pop(key, None)
+            st.rerun()
 
-        def multi_filter(column: str, label: str) -> list[str]:
-            values = sorted([v for v in df[column].dropna().unique().tolist() if str(v).strip()])
-            return st.multiselect(label, values, default=values)
+        def multi_filter(column: str, label: str, key: str) -> tuple[list[str], list[str]]:
+            values = sorted({safe_text(v) for v in working[column].tolist() if safe_text(v)})
+            selected = st.multiselect(label, values, default=values, key=key)
+            return selected, values
 
-        ambitos = multi_filter("Ámbito", "Ámbito")
-        estados_originales = multi_filter("Estado", "Estado original")
-        estados_actuales = multi_filter("estado_actual", "Estado actual")
-        tipos = multi_filter("Tipo", "Tipo")
-        promotores = multi_filter("Agente promotor", "Agente promotor")
-        estado_eval = st.multiselect("Estado de evaluación", STATUS_OPTIONS, default=STATUS_OPTIONS)
-        texto = st.text_input("Buscar texto", placeholder="Título, descripción, indicadores...")
+        ambitos, all_ambitos = multi_filter("Ámbito", "Ámbito", "filter_ambito")
+        estados_originales, all_estados_originales = multi_filter("Estado", "Estado original", "filter_estado_original")
+        estados_actuales, all_estados_actuales = multi_filter("estado_actual", "Estado actual", "filter_estado_actual")
+        tipos, all_tipos = multi_filter("Tipo", "Tipo", "filter_tipo")
+        promotores, all_promotores = multi_filter("Agente promotor", "Agente promotor", "filter_promotor")
+        estado_eval = st.multiselect(
+            "Estado de evaluación",
+            STATUS_OPTIONS,
+            default=STATUS_OPTIONS,
+            key="filter_estado_evaluacion",
+        )
+        texto = st.text_input(
+            "Buscar texto",
+            placeholder="Título, descripción, indicadores...",
+            key="filter_texto",
+        )
 
-    filtered = df[
-        df["Ámbito"].isin(ambitos)
-        & df["Estado"].isin(estados_originales)
-        & df["estado_actual"].isin(estados_actuales)
-        & df["Tipo"].isin(tipos)
-        & df["Agente promotor"].isin(promotores)
-        & df["estado_evaluacion"].fillna("Sin evaluar").isin(estado_eval)
-    ].copy()
+    mask = pd.Series(True, index=working.index)
+
+    # Si están seleccionadas todas las opciones, el filtro no restringe filas.
+    if set(ambitos) != set(all_ambitos):
+        mask &= working["Ámbito"].isin(ambitos)
+    if set(estados_originales) != set(all_estados_originales):
+        mask &= working["Estado"].isin(estados_originales)
+    if set(estados_actuales) != set(all_estados_actuales):
+        mask &= working["estado_actual"].isin(estados_actuales)
+    if set(tipos) != set(all_tipos):
+        mask &= working["Tipo"].isin(tipos)
+    if set(promotores) != set(all_promotores):
+        mask &= working["Agente promotor"].isin(promotores)
+    if set(estado_eval) != set(STATUS_OPTIONS):
+        mask &= working["estado_evaluacion"].isin(estado_eval)
+
+    filtered = working[mask].copy()
     if texto:
         haystack = filtered[["Título", "Descripción", "Indicadores", "Medida"]].fillna("").agg(" ".join, axis=1).str.lower()
         filtered = filtered[haystack.str.contains(texto.lower(), regex=False)]
