@@ -1207,29 +1207,6 @@ def apply_action_details(data: pd.DataFrame, details: pd.DataFrame) -> pd.DataFr
     return result
 
 
-def ensure_responsible_contact(engine: Engine, responsible: str, user_name: str) -> None:
-    """Añade el responsable a la Red Local de Salud si todavía no existe."""
-    responsible = safe_text(responsible)
-    if not responsible:
-        return
-    contacts = get_contacts(engine)
-    if not contacts.empty:
-        existing = set(contacts["Persona"].fillna("").astype(str).str.strip().str.casefold())
-        existing |= set(contacts["Entidad"].fillna("").astype(str).str.strip().str.casefold())
-        if responsible.casefold() in existing:
-            return
-    add_contact(engine, {
-        "Categoria": "Responsable de seguimiento",
-        "Subcategoria": "",
-        "Comisión": "",
-        "Perfil": "",
-        "Entidad": "",
-        "Teléfono": "",
-        "Persona": responsible,
-        "Mail": "",
-    }, user_name)
-
-
 def save_action_details(engine: Engine, payload: dict[str, Any], user_name: str) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     data = {
@@ -1245,7 +1222,6 @@ def save_action_details(engine: Engine, payload: dict[str, Any], user_name: str)
         "indicadores": safe_text(payload.get("indicadores")),
         "recursos": safe_text(payload.get("recursos")),
         "estado_actual": safe_text(payload.get("estado_actual")) or "No iniciada",
-        "responsable_seguimiento": safe_text(payload.get("responsable_seguimiento")),
         "updated_by": safe_text(user_name),
         "updated_at": now,
     }
@@ -1260,7 +1236,6 @@ def save_action_details(engine: Engine, payload: dict[str, Any], user_name: str)
             """),
             data,
         )
-    ensure_responsible_contact(engine, data["responsable_seguimiento"], user_name)
     clear_data_caches()
 
 
@@ -3880,13 +3855,20 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         st.warning("La acción seleccionada no está disponible para este perfil.")
         return
     row = selected_rows.iloc[0]
+    # El agente promotor se elige directamente del listado vivo de la Red Local de Salud.
     contacts = get_contacts(engine)
-    promoter_options = sorted({safe_text(value) for value in contacts.get("Persona", pd.Series(dtype=str)).tolist() if safe_text(value)}) if not contacts.empty else []
+    promoter_contacts = contacts[contacts["Persona"].apply(safe_text) != ""].copy() if not contacts.empty else pd.DataFrame()
+    promoter_contact_ids = promoter_contacts["contacto_id"].astype(int).tolist() if not promoter_contacts.empty else []
+    promoter_label_by_id = dict(zip(
+        promoter_contacts["contacto_id"].astype(int),
+        promoter_contacts.apply(lambda contact: safe_text(contact.get("Persona")), axis=1),
+    )) if not promoter_contacts.empty else {}
     current_promoter = safe_text(row.get("Agente promotor"))
-    if current_promoter and current_promoter not in promoter_options:
-        promoter_options.append(current_promoter)
-        promoter_options = sorted(promoter_options)
-    promoter_options = ["Sin asignar"] + promoter_options
+    current_promoter_id = next((
+        int(contact["contacto_id"]) for _, contact in promoter_contacts.iterrows()
+        if safe_text(contact.get("Persona")) == current_promoter
+    ), None) if not promoter_contacts.empty else None
+    promoter_select_options = [None] + promoter_contact_ids
 
     st.subheader(safe_text(row.get("Título")))
     st.caption("Información general de la actividad. Los campos editables se guardan en la base de datos; Estado original permanece bloqueado.")
@@ -3971,16 +3953,17 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
             left.markdown("**Agente Promotor**")
-            agente_index = promoter_options.index(current_promoter) if current_promoter in promoter_options else 0
-            agente_edit = right.selectbox(
+            agente_contacto_id = right.selectbox(
                 "Agente Promotor",
-                promoter_options,
-                index=agente_index,
+                promoter_select_options,
+                index=promoter_select_options.index(current_promoter_id) if current_promoter_id in promoter_select_options else 0,
+                format_func=lambda contacto_id: "Sin asignar" if contacto_id is None else promoter_label_by_id.get(int(contacto_id), "Contacto RLS"),
                 label_visibility="collapsed",
-                help="Selecciona a una persona integrante de la Red Local de Salud.",
+                help="El listado se sincroniza con las personas de la pestaña Red Local de Salud.",
             )
-            if agente_edit == "Sin asignar":
-                agente_edit = ""
+            agente_edit = promoter_label_by_id.get(int(agente_contacto_id), "") if agente_contacto_id is not None else ""
+            if not promoter_contact_ids:
+                right.caption("No hay personas con nombre en el listado de la Red Local de Salud.")
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
             left.markdown("**Personas destinatarias**")
@@ -4002,15 +3985,6 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             left.markdown("**Recursos**")
             recursos_edit = right.text_area("Recursos", value=safe_text(row.get("Recursos")), height=90, label_visibility="collapsed")
 
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Responsable de seguimiento**")
-            responsable_edit = right.text_input(
-                "Responsable de seguimiento",
-                value=safe_text(row.get("responsable_seguimiento")),
-                label_visibility="collapsed",
-                help="Persona o entidad que supervisará el cumplimiento. Si no existe en la Red Local de Salud, se añadirá automáticamente como contacto.",
-            )
-
         save_activity = st.form_submit_button("Guardar información de la actividad", type="primary")
 
     if save_activity:
@@ -4030,8 +4004,15 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 "indicadores": indicadores_edit,
                 "recursos": recursos_edit,
                 "estado_actual": estado_actual_edit,
-                "responsable_seguimiento": responsable_edit,
             }, user_name)
+            # El agente promotor también queda vinculado como persona asignada a la acción.
+            # Se conservan las demás asignaciones hechas desde la matriz.
+            if agente_contacto_id is not None:
+                current_assignments = get_action_contacts(engine)
+                existing_ids = current_assignments.loc[
+                    current_assignments["id_accion"] == selected_id, "contacto_id"
+                ].astype(int).tolist() if not current_assignments.empty else []
+                save_action_contacts(engine, selected_id, existing_ids + [int(agente_contacto_id)], user_name)
             st.success("Información de la actividad actualizada.")
             st.rerun()
 
@@ -4039,7 +4020,6 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     current_estado = safe_text(row.get("estado_evaluacion")) or "Sin evaluar"
     current_cumplimiento = safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar"
     current_priority = safe_text(row.get("prioridad")) or "Media"
-    responsable = safe_text(row.get("responsable_seguimiento"))
 
     with st.container(key="tracking_evaluation_panel"):
         st.markdown('<div class="tracking-evaluation-title">Seguimiento de la acción y evaluación</div>', unsafe_allow_html=True)
@@ -4138,7 +4118,6 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 "cumplimiento_indicadores": cumplimiento,
                 "valoracion_tecnica": valoracion,
                 "observaciones": observaciones,
-                "responsable_seguimiento": responsable,
                 "fecha_actualizacion": fecha_actualizacion.isoformat(),
                 "evidencias": "",
                 "riesgos": riesgos,
