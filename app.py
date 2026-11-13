@@ -30,7 +30,7 @@ DEFAULT_SHEET = "MATRIZ Evaluación"
 LOCAL_SQLITE = f"sqlite:///{APP_DIR / 'evaluacion.db'}"
 
 BASE_COLUMNS = [
-    "Ámbito", "Título", "Tipo", "Estado", "Medida", "Agente promotor",
+    "Ámbito", "Título", "Tipo", "Estado", "Medida", "Preasignación",
     "Descripción", "Personas destinatarias", "Temporalidad", "Indicadores", "Recursos",
 ]
 
@@ -605,10 +605,16 @@ def read_excel_bytes(file_bytes: bytes) -> pd.DataFrame:
     df = pd.read_excel(excel_file, sheet_name=sheet_name).dropna(how="all").copy()
     df.columns = [normalize_column_name(c) for c in df.columns]
     df = df.drop(columns=[c for c in df.columns if c.lower().startswith("unnamed")], errors="ignore")
+    # Compatibilidad: el Excel de origen puede seguir usando el nombre antiguo.
+    if "Agente promotor" in df.columns and "Preasignación" not in df.columns:
+        df = df.rename(columns={"Agente promotor": "Preasignación"})
     for col in BASE_COLUMNS:
         if col not in df.columns:
             df[col] = ""
-    df = df[BASE_COLUMNS + [c for c in df.columns if c not in BASE_COLUMNS]].copy()
+    # Campo nuevo: se completa al elegir una persona de la Red Local de Salud.
+    if "Agente promotor" not in df.columns:
+        df["Agente promotor"] = ""
+    df = df[BASE_COLUMNS + ["Agente promotor"] + [c for c in df.columns if c not in BASE_COLUMNS and c != "Agente promotor"]].copy()
     df.insert(0, "id_accion", range(1, len(df) + 1))
     df["id_accion"] = df["id_accion"].astype(int)
     for col in df.columns:
@@ -768,6 +774,7 @@ def init_db(_engine: Engine) -> None:
                 ambito TEXT,
                 tipo TEXT,
                 medida TEXT,
+                preasignacion TEXT,
                 agente_promotor TEXT,
                 personas_destinatarias TEXT,
                 temporalidad TEXT,
@@ -782,6 +789,18 @@ def init_db(_engine: Engine) -> None:
             """
         ))
         contact_id_type = "SERIAL PRIMARY KEY" if is_postgres(engine) else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        # Migración compatible con bases de datos ya existentes: conserva el valor
+        # que antes se guardaba como "Agente promotor" dentro de Preasignación.
+        if is_postgres(engine):
+            has_preassignment = conn.execute(
+                text("SELECT 1 FROM information_schema.columns WHERE table_name = 'action_details' AND column_name = 'preasignacion'")
+            ).first() is not None
+        else:
+            has_preassignment = any(row[1] == "preasignacion" for row in conn.execute(text("PRAGMA table_info(action_details)")).fetchall())
+        if not has_preassignment:
+            conn.execute(text("ALTER TABLE action_details ADD COLUMN preasignacion TEXT"))
+            conn.execute(text("UPDATE action_details SET preasignacion = agente_promotor, agente_promotor = '' WHERE preasignacion IS NULL OR preasignacion = ''"))
+
         conn.execute(text(
             f"""
             CREATE TABLE IF NOT EXISTS contacts (
@@ -1149,7 +1168,7 @@ def get_action_details(_engine: Engine) -> pd.DataFrame:
         df = pd.read_sql_query(text("SELECT * FROM action_details ORDER BY id_accion ASC"), conn)
     if df.empty:
         return pd.DataFrame(columns=[
-            "id_accion", "ambito", "tipo", "medida", "agente_promotor", "personas_destinatarias",
+            "id_accion", "ambito", "tipo", "medida", "preasignacion", "agente_promotor", "personas_destinatarias",
             "temporalidad", "descripcion", "indicadores", "recursos", "estado_actual",
             "responsable_seguimiento", "updated_by", "updated_at",
         ])
@@ -1166,6 +1185,7 @@ def apply_action_details(data: pd.DataFrame, details: pd.DataFrame) -> pd.DataFr
         "ambito": "Ámbito",
         "tipo": "Tipo",
         "medida": "Medida",
+        "preasignacion": "Preasignación",
         "agente_promotor": "Agente promotor",
         "personas_destinatarias": "Personas destinatarias",
         "temporalidad": "Temporalidad",
@@ -1217,6 +1237,7 @@ def save_action_details(engine: Engine, payload: dict[str, Any], user_name: str)
         "ambito": safe_text(payload.get("ambito")),
         "tipo": safe_text(payload.get("tipo")),
         "medida": safe_text(payload.get("medida")),
+        "preasignacion": safe_text(payload.get("preasignacion")),
         "agente_promotor": safe_text(payload.get("agente_promotor")),
         "personas_destinatarias": safe_text(payload.get("personas_destinatarias")),
         "temporalidad": safe_text(payload.get("temporalidad")),
@@ -1942,8 +1963,10 @@ def render_session_bar() -> str:
 def filter_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """Sin filtros globales laterales; solo normaliza valores operativos."""
     working = df.copy()
+    if "Preasignación" in working.columns:
+        working["Preasignación"] = working["Preasignación"].apply(safe_text).replace("", "Pendiente")
     if "Agente promotor" in working.columns:
-        working["Agente promotor"] = working["Agente promotor"].apply(safe_text).replace("", "Pendiente")
+        working["Agente promotor"] = working["Agente promotor"].apply(safe_text)
     if "estado_actual" in working.columns:
         working["estado_actual"] = working["estado_actual"].apply(safe_text)
         working["estado_actual"] = working["estado_actual"].where(
@@ -3456,7 +3479,7 @@ def render_dashboard(df: pd.DataFrame) -> None:
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
-        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "estado_actual", "Agente promotor", "Temporalidad",
+        "id_accion", "Ámbito", "Título", "Tipo", "Estado", "estado_actual", "Preasignación", "Agente promotor", "Temporalidad",
         "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
@@ -3857,6 +3880,13 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         st.warning("La acción seleccionada no está disponible para este perfil.")
         return
     row = selected_rows.iloc[0]
+    contacts = get_contacts(engine)
+    promoter_options = sorted({safe_text(value) for value in contacts.get("Persona", pd.Series(dtype=str)).tolist() if safe_text(value)}) if not contacts.empty else []
+    current_promoter = safe_text(row.get("Agente promotor"))
+    if current_promoter and current_promoter not in promoter_options:
+        promoter_options.append(current_promoter)
+        promoter_options = sorted(promoter_options)
+    promoter_options = ["Sin asignar"] + promoter_options
 
     st.subheader(safe_text(row.get("Título")))
     st.caption("Información general de la actividad. Los campos editables se guardan en la base de datos; Estado original permanece bloqueado.")
@@ -3931,8 +3961,26 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             )
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Agente promotor**")
-            agente_edit = right.text_input("Agente promotor", value=safe_text(row.get("Agente promotor")), label_visibility="collapsed")
+            left.markdown("**Preasignación**")
+            preasignacion_edit = right.text_input(
+                "Preasignación",
+                value=safe_text(row.get("Preasignación")),
+                label_visibility="collapsed",
+                help="Entidad o agente previsto inicialmente en la matriz.",
+            )
+
+            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
+            left.markdown("**Agente Promotor**")
+            agente_index = promoter_options.index(current_promoter) if current_promoter in promoter_options else 0
+            agente_edit = right.selectbox(
+                "Agente Promotor",
+                promoter_options,
+                index=agente_index,
+                label_visibility="collapsed",
+                help="Selecciona a una persona integrante de la Red Local de Salud.",
+            )
+            if agente_edit == "Sin asignar":
+                agente_edit = ""
 
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
             left.markdown("**Personas destinatarias**")
@@ -3974,6 +4022,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
                 "ambito": ambito_edit,
                 "tipo": tipo_edit,
                 "medida": medida_edit,
+                "preasignacion": preasignacion_edit,
                 "agente_promotor": agente_edit,
                 "personas_destinatarias": destinatarias_edit,
                 "temporalidad": temporalidad_edit,
