@@ -3591,9 +3591,27 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
         filtered = filtered[haystack.str.contains(texto.lower(), regex=False)]
 
     if not assignments.empty:
-        assigned_meta = assignments.merge(data[["id_accion", "Título", "Ámbito"]], on="id_accion", how="left")
+        # Vincula las asignaciones con la matriz y muestra el número y título
+        # de cada acción asociada a la persona de la Red Local de Salud.
+        action_columns = ["id_accion", "Título"]
+        assigned_meta = assignments.merge(
+            data[action_columns].drop_duplicates(subset=["id_accion"]),
+            on="id_accion",
+            how="left",
+        )
+        assigned_meta["accion_label"] = assigned_meta.apply(
+            lambda row: (
+                f"{int(row['id_accion']):03d} - {safe_text(row['Título'])}"
+                if pd.notna(row.get("id_accion")) and safe_text(row.get("Título"))
+                else f"{int(row['id_accion']):03d} - Acción sin título"
+                if pd.notna(row.get("id_accion"))
+                else ""
+            ),
+            axis=1,
+        )
+        assigned_meta = assigned_meta.drop_duplicates(subset=["contacto_id", "id_accion"])
         assigned_text = assigned_meta.groupby("contacto_id").agg(
-            acciones_asignadas=("Título", lambda values: "; ".join([safe_text(v) for v in values if safe_text(v)])),
+            acciones_asignadas=("accion_label", lambda values: "\n".join([safe_text(v) for v in values if safe_text(v)])),
             num_acciones=("id_accion", "nunique"),
         ).reset_index()
         filtered = filtered.merge(assigned_text, on="contacto_id", how="left")
@@ -3614,7 +3632,9 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
         key="contacts_editor",
         column_config={
             "contacto_id": st.column_config.NumberColumn("ID", width="small"),
-            "acciones_asignadas": st.column_config.TextColumn("Acciones asignadas", width="large"),
+            "acciones_asignadas": st.column_config.TextColumn(
+                "Acciones asignadas", width="large", help="Número y título de cada acción asignada a esta persona."
+            ),
             "num_acciones": st.column_config.NumberColumn("Nº acciones", width="small"),
         },
     )
