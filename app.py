@@ -467,6 +467,102 @@ def apply_brand_theme() -> None:
         .st-key-action_selector_panel [data-testid="stCaptionContainer"] p {{
             color: white !important;
         }}
+        /* Diseño fluido: ningún widget de la ficha debe ensanchar el viewport. */
+        html, body, #root, .stApp, [data-testid="stAppViewContainer"],
+        [data-testid="stMain"], [data-testid="stMainBlockContainer"],
+        .main .block-container {{
+            max-width: 100% !important;
+            min-width: 0 !important;
+            box-sizing: border-box !important;
+        }}
+        .main .block-container {{
+            width: 100% !important;
+            padding-left: clamp(.65rem, 2vw, 1.7rem) !important;
+            padding-right: clamp(.65rem, 2vw, 1.7rem) !important;
+        }}
+        .st-key-activity_fields_compact,
+        .st-key-tracking_evaluation_panel,
+        .st-key-action_selector_panel {{
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }}
+        .st-key-activity_fields_compact [data-testid="stHorizontalBlock"],
+        .st-key-tracking_evaluation_panel [data-testid="stHorizontalBlock"] {{
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+        }}
+        .st-key-activity_fields_compact [data-testid="column"],
+        .st-key-tracking_evaluation_panel [data-testid="column"] {{
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }}
+        .st-key-activity_fields_compact [data-testid="stSelectbox"],
+        .st-key-activity_fields_compact [data-testid="stTextInput"],
+        .st-key-activity_fields_compact [data-testid="stTextArea"],
+        .st-key-tracking_evaluation_panel [data-testid="stSelectbox"],
+        .st-key-tracking_evaluation_panel [data-testid="stTextInput"],
+        .st-key-tracking_evaluation_panel [data-testid="stTextArea"],
+        .st-key-tracking_evaluation_panel [data-testid="stDateInput"],
+        .st-key-action_selector_panel [data-testid="stSelectbox"],
+        .st-key-activity_fields_compact [data-baseweb="select"],
+        .st-key-tracking_evaluation_panel [data-baseweb="select"] {{
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+        }}
+        .st-key-activity_fields_compact [data-baseweb="select"] > div,
+        .st-key-tracking_evaluation_panel [data-baseweb="select"] > div,
+        .st-key-action_selector_panel [data-baseweb="select"] > div {{
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }}
+        .st-key-activity_fields_compact [data-baseweb="select"] [data-testid="stMarkdownContainer"],
+        .st-key-activity_fields_compact [data-baseweb="select"] span,
+        .st-key-tracking_evaluation_panel [data-baseweb="select"] span,
+        .st-key-action_selector_panel [data-baseweb="select"] span {{
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+            min-width: 0 !important;
+        }}
+        .st-key-activity_fields_compact input,
+        .st-key-activity_fields_compact textarea,
+        .st-key-tracking_evaluation_panel input,
+        .st-key-tracking_evaluation_panel textarea {{
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }}
+        /* Pantallas estrechas: una sola columna para evitar scroll lateral. */
+        @media (max-width: 850px) {{
+            .st-key-activity_fields_compact [data-testid="stHorizontalBlock"],
+            .st-key-tracking_evaluation_panel [data-testid="stHorizontalBlock"] {{
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: .65rem !important;
+            }}
+            .st-key-activity_fields_compact [data-testid="stHorizontalBlock"] > [data-testid="column"],
+            .st-key-tracking_evaluation_panel [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
+                width: 100% !important;
+                flex: 0 0 100% !important;
+            }}
+            .st-key-activity_fields_compact,
+            .st-key-tracking_evaluation_panel {{
+                padding: .75rem !important;
+            }}
+        }}
+        @media (max-width: 520px) {{
+            .main .block-container {{
+                padding-left: .5rem !important;
+                padding-right: .5rem !important;
+            }}
+            .st-key-action_selector_panel {{ padding: .75rem !important; }}
+            .st-key-tracking_evaluation_panel h3 {{ overflow-wrap: anywhere; }}
+        }}
+
         /* Ficha compacta: etiquetas pegadas a los campos y menos aire vertical. */
         .st-key-activity_fields_compact [data-testid="stWidgetLabel"],
         .st-key-tracking_evaluation_panel [data-testid="stWidgetLabel"] {{
@@ -4008,7 +4104,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         scope_options = sorted(set(safe_text(v) for v in all_data["Ámbito"] if safe_text(v)) | {initial["ambito"]})
         type_options = sorted(set(safe_text(v) for v in all_data["Tipo"] if safe_text(v)) | {initial["tipo"]})
         # Campos cortos en dos columnas; las etiquetas quedan justo encima de sus controles.
-        short_left, short_right = st.columns(2, gap="medium")
+        short_left, short_right = st.columns(2, gap="small")
         with short_left:
             st.selectbox("Ámbito", scope_options, key=init("ambito", initial["ambito"]), on_change=callback)
             st.selectbox("Estado actual", ACTION_STATUS_OPTIONS, key=init("estado", current_status), on_change=callback)
@@ -4020,7 +4116,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback)
         st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=90)
         st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=105)
-        long_left, long_right = st.columns(2, gap="medium")
+        long_left, long_right = st.columns(2, gap="small")
         with long_left:
             st.text_area("Indicadores previstos", key=init("indicadores", initial["indicadores"]), on_change=callback, height=105)
         with long_right:
@@ -4054,7 +4150,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         return k
     ec = lambda: _auto_save_evaluation(engine, selected_id, user_name)
     with st.container(key="tracking_evaluation_panel"):
-        ev_left, ev_right = st.columns(2, gap="medium")
+        ev_left, ev_right = st.columns(2, gap="small")
         with ev_left:
             st.selectbox("Estado de evaluación", STATUS_OPTIONS, key=ek("estado", eval_initial["estado_evaluacion"]), on_change=ec)
             st.selectbox("Prioridad", PRIORITY_OPTIONS, key=ek("prioridad", eval_initial["prioridad"]), on_change=ec)
@@ -4062,7 +4158,7 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, key=ek("cumplimiento", eval_initial["cumplimiento_indicadores"]), on_change=ec)
             st.date_input("Fecha de actualización", key=ek("fecha", parse_iso_date(eval_initial["fecha_actualizacion"]) or date.today()), on_change=ec)
         st.info("Indicadores previstos: " + (safe_text(row.get("Indicadores")) or "Sin indicadores definidos."))
-        notes_left, notes_right = st.columns(2, gap="medium")
+        notes_left, notes_right = st.columns(2, gap="small")
         with notes_left:
             st.text_area("Valoración técnica", key=ek("valoracion", eval_initial["valoracion_tecnica"]), on_change=ec, height=105)
             st.text_area("Riesgos / bloqueos", key=ek("riesgos", eval_initial["riesgos"]), on_change=ec, height=105)
