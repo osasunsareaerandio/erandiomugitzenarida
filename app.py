@@ -7,6 +7,7 @@ import io
 import os
 import re
 import smtplib
+import unicodedata
 from datetime import date, datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -716,6 +717,68 @@ def apply_brand_theme() -> None:
             font-size: 11pt !important;
             line-height: 1.5 !important;
         }}
+        /* Controles accesibles: 11 pt requiere altura natural y salto de línea. */
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stFormSubmitButton"] button,
+        .stApp [data-testid="stPopover"] > button,
+        .stApp [data-testid="stDownloadButton"] button,
+        .stApp [data-testid="stBaseButton-secondary"],
+        .stApp [data-testid="stBaseButton-primary"] {{
+            min-height: 3rem !important;
+            height: auto !important;
+            max-width: 100% !important;
+            padding: .55rem .75rem !important;
+            line-height: 1.35 !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            box-sizing: border-box !important;
+        }}
+        .stApp [data-testid="stButton"] button p,
+        .stApp [data-testid="stFormSubmitButton"] button p,
+        .stApp [data-testid="stPopover"] > button p,
+        .stApp [data-testid="stDownloadButton"] button p,
+        .stApp button[data-testid^="stBaseButton"] p {{
+            margin: 0 !important;
+            line-height: 1.35 !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            text-align: center !important;
+        }}
+        .stApp [data-testid="stPopover"] > button {{
+            width: 100% !important;
+            gap: .3rem !important;
+        }}
+        /* Encabezados desplegables, especialmente importar y alta de contactos. */
+        .stApp [data-testid="stExpander"] summary {{
+            min-height: 3.1rem !important;
+            height: auto !important;
+            padding: .7rem .9rem !important;
+            align-items: center !important;
+            box-sizing: border-box !important;
+        }}
+        .stApp [data-testid="stExpander"] summary p {{
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            line-height: 1.4 !important;
+            margin: 0 !important;
+        }}
+        /* Los selectores y sus etiquetas tampoco deben superponerse. */
+        .stApp [data-testid="stWidgetLabel"] {{
+            height: auto !important;
+            min-height: 0 !important;
+            margin-bottom: .2rem !important;
+        }}
+        .stApp [data-testid="stWidgetLabel"] p {{
+            line-height: 1.4 !important;
+            white-space: normal !important;
+        }}
+        .stApp [data-baseweb="select"] > div,
+        .stApp [data-baseweb="input"] > div {{
+            min-height: 2.85rem !important;
+            height: auto !important;
+        }}
+        /* La cabecera debe conservar suficiente espacio para Ayuda y Cerrar sesión. */
+        .session-strip {{ min-width: 0 !important; }}
         @media (max-width: 750px) {{
             .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] {{
                 flex-direction: column !important;
@@ -2115,7 +2178,7 @@ def render_session_bar() -> str:
         unsafe_allow_html=True,
     )
 
-    info_col, help_col, logout_col = st.columns([7, 1.45, 1.55], vertical_alignment="center")
+    info_col, help_col, logout_col = st.columns([5, 2.5, 2.5], vertical_alignment="center")
     with info_col:
         st.markdown(
             f"""
@@ -4201,13 +4264,23 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     row = selected_rows.iloc[0]
     contacts = get_contacts(engine)
     promoter_ids = contacts["contacto_id"].astype(int).tolist() if not contacts.empty else []
-    # Streamlit filtra el texto completo de format_func: nombre, entidad, perfil, comisión, correo, etc.
+    # Los resultados solo muestran persona y entidad; no la ficha completa del contacto.
+    # La búsqueda utiliza exclusivamente Categoria, Entidad y Persona.
     promoter_labels = {}
     promoter_names = {}
+    promoter_search_text = {}
+    def normalize_promoter_search(value: Any) -> str:
+        value = unicodedata.normalize("NFKD", safe_text(value).casefold())
+        return "".join(char for char in value if not unicodedata.combining(char))
+
     for _, contact in contacts.iterrows():
         cid = int(contact["contacto_id"])
-        promoter_labels[cid] = " · ".join(safe_text(contact.get(c)) for c in CONTACT_COLUMNS if safe_text(contact.get(c))) or f"Contacto {cid}"
-        promoter_names[cid] = safe_text(contact.get("Persona")) or safe_text(contact.get("Entidad"))
+        persona = safe_text(contact.get("Persona"))
+        entidad = safe_text(contact.get("Entidad"))
+        categoria = safe_text(contact.get("Categoria"))
+        promoter_labels[cid] = " — ".join(part for part in (persona, entidad) if part) or (categoria or f"Contacto {cid}")
+        promoter_names[cid] = persona or entidad
+        promoter_search_text[cid] = normalize_promoter_search(" ".join((categoria, entidad, persona)))
     current_promoter = safe_text(row.get("Agente promotor"))
     selected_promoter_id = next((cid for cid in promoter_ids if promoter_names[cid] == current_promoter), None)
     st.session_state[f"promoter_names_{selected_id}"] = promoter_names
@@ -4248,7 +4321,28 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             st.text_input("Temporalidad", key=init("temporalidad", initial["temporalidad"]), on_change=callback)
         with short_right:
             st.selectbox("Tipo", type_options, key=init("tipo", initial["tipo"]), on_change=callback)
-            st.selectbox("Agente promotor", [None] + promoter_ids, key=init("promotor", selected_promoter_id), on_change=callback, format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"), help="Persona o entidad que ejecutará la acción. Busca por cualquiera de los campos de la agenda.")
+            st.text_input(
+                "Buscar agente promotor",
+                key=f"promoter_filter_{selected_id}",
+                placeholder="Categoría, entidad o persona...",
+                help="Busca por cualquiera de estos tres campos de la Red Local de Salud.",
+            )
+            search_term = normalize_promoter_search(st.session_state.get(f"promoter_filter_{selected_id}", ""))
+            matching_promoters = [cid for cid in promoter_ids if not search_term or search_term in promoter_search_text[cid]]
+            selected_widget_promoter = st.session_state.get(key("promotor"), selected_promoter_id)
+            # Mantener el contacto seleccionado aunque no aparezca en el filtro actual.
+            if selected_widget_promoter is not None and selected_widget_promoter in promoter_ids and selected_widget_promoter not in matching_promoters:
+                matching_promoters.insert(0, selected_widget_promoter)
+            st.selectbox(
+                "Agente promotor",
+                [None] + matching_promoters,
+                key=init("promotor", selected_promoter_id),
+                on_change=callback,
+                format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"),
+                help="Selecciona quién ejecutará la acción. Los resultados muestran solo persona y entidad.",
+            )
+            if search_term and not any(search_term in promoter_search_text[cid] for cid in promoter_ids):
+                st.caption("No hay contactos que coincidan con la búsqueda.")
             st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback)
         st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=90)
         st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=105)
