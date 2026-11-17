@@ -624,6 +624,46 @@ def apply_brand_theme() -> None:
             font-style: normal;
             font-weight: 600;
         }}
+
+        /* Tipografía general: 11 pt = 14,67 px. La fuente se toma del sistema
+           si está instalada; las negritas y cursivas originales se conservan. */
+        html, body, .stApp, .stApp p, .stApp span, .stApp label,
+        .stApp li, .stApp a, .stApp button, .stApp input,
+        .stApp textarea, .stApp select, .stApp th, .stApp td,
+        .stApp [data-baseweb="select"],
+        .stApp [data-testid="stMarkdownContainer"] {{
+            font-family: "Franklin Gothic Book", "Franklin Gothic", "Arial", sans-serif !important;
+        }}
+        html, body, .stApp {{
+            font-size: 11pt !important;
+        }}
+        .stApp p, .stApp label, .stApp li,
+        .stApp input, .stApp textarea, .stApp select,
+        .stApp button, .stApp th, .stApp td,
+        .stApp [data-baseweb="select"],
+        .stApp [data-testid="stCaptionContainer"] p,
+        .stApp [data-testid="stWidgetLabel"] p,
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [data-testid="stMarkdownContainer"] li,
+        .stApp .session-time, .stApp .session-profile,
+        .stApp .nav-helper, .stApp .gizagune-footer,
+        .stApp .weekday-cell, .stApp .day-number,
+        .stApp .day-item, .stApp .more-items {{
+            font-size: 11pt !important;
+        }}
+        .stApp h1 {{ font-size: 1.75rem !important; }}
+        .stApp h2 {{ font-size: 1.45rem !important; }}
+        .stApp h3 {{ font-size: 1.22rem !important; }}
+        .stApp h4, .stApp h5, .stApp h6 {{ font-size: 1.08rem !important; }}
+        /* Permite que las etiquetas largas se partan sin forzar scroll lateral. */
+        .stApp [data-testid="stWidgetLabel"] p,
+        .stApp [data-testid="stMarkdownContainer"] p {{
+            overflow-wrap: anywhere;
+        }}
+        .stApp [data-testid="column"],
+        .stApp [data-testid="stHorizontalBlock"] {{
+            min-width: 0 !important;
+        }}
 </style>
         """,
         unsafe_allow_html=True,
