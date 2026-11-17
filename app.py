@@ -467,6 +467,20 @@ def apply_brand_theme() -> None:
         .st-key-action_selector_panel [data-testid="stCaptionContainer"] p {{
             color: white !important;
         }}
+        /* Ficha compacta: etiquetas pegadas a los campos y menos aire vertical. */
+        .st-key-activity_fields_compact [data-testid="stWidgetLabel"],
+        .st-key-tracking_evaluation_panel [data-testid="stWidgetLabel"] {{
+            margin-bottom: 0.15rem !important;
+        }}
+        .st-key-activity_fields_compact [data-testid="stVerticalBlock"],
+        .st-key-tracking_evaluation_panel [data-testid="stVerticalBlock"] {{
+            gap: 0.5rem !important;
+        }}
+        .st-key-activity_fields_compact [data-testid="stHorizontalBlock"],
+        .st-key-tracking_evaluation_panel [data-testid="stHorizontalBlock"] {{
+            align-items: start;
+        }}
+
         .st-key-tracking_evaluation_panel {{
             background: rgba(174, 124, 170, 0.08);
             border: 1px solid rgba(174, 124, 170, 0.35);
@@ -3990,25 +4004,27 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     elif st.session_state.get("last_autosave"):
         st.caption("Último guardado automático: " + st.session_state["last_autosave"])
     st.markdown("### Datos de la actividad")
-    with st.container(border=True):
+    with st.container(border=True, key="activity_fields_compact"):
         scope_options = sorted(set(safe_text(v) for v in all_data["Ámbito"] if safe_text(v)) | {initial["ambito"]})
         type_options = sorted(set(safe_text(v) for v in all_data["Tipo"] if safe_text(v)) | {initial["tipo"]})
-        def display(label, widget):
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown(f"**{label}**")
-            with right:
-                widget()
-        display("Ámbito", lambda: st.selectbox("Ámbito", scope_options, key=init("ambito", initial["ambito"]), on_change=callback, label_visibility="collapsed"))
-        display("Tipo", lambda: st.selectbox("Tipo", type_options, key=init("tipo", initial["tipo"]), on_change=callback, label_visibility="collapsed"))
-        display("Estado actual", lambda: st.selectbox("Estado actual", ACTION_STATUS_OPTIONS, key=init("estado", current_status), on_change=callback, label_visibility="collapsed"))
-        display("Próximo paso", lambda: st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=110, label_visibility="collapsed"))
-        display("Asignado a", lambda: st.text_input("Asignado a", key=init("asignado", initial["preasignacion"]), on_change=callback, label_visibility="collapsed"))
-        display("Agente promotor", lambda: st.selectbox("Agente promotor", [None] + promoter_ids, key=init("promotor", selected_promoter_id), on_change=callback, format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"), label_visibility="collapsed", help="Persona o entidad que ejecutará la acción. Busca por cualquiera de los campos de la agenda."))
-        display("Personas destinatarias", lambda: st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback, label_visibility="collapsed"))
-        display("Temporalidad", lambda: st.text_input("Temporalidad", key=init("temporalidad", initial["temporalidad"]), on_change=callback, label_visibility="collapsed"))
-        display("Descripción", lambda: st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=110, label_visibility="collapsed"))
-        display("Indicadores previstos", lambda: st.text_area("Indicadores previstos", key=init("indicadores", initial["indicadores"]), on_change=callback, height=110, label_visibility="collapsed"))
-        display("Recursos", lambda: st.text_area("Recursos", key=init("recursos", initial["recursos"]), on_change=callback, height=90, label_visibility="collapsed"))
+        # Campos cortos en dos columnas; las etiquetas quedan justo encima de sus controles.
+        short_left, short_right = st.columns(2, gap="medium")
+        with short_left:
+            st.selectbox("Ámbito", scope_options, key=init("ambito", initial["ambito"]), on_change=callback)
+            st.selectbox("Estado actual", ACTION_STATUS_OPTIONS, key=init("estado", current_status), on_change=callback)
+            st.text_input("Asignado a", key=init("asignado", initial["preasignacion"]), on_change=callback)
+            st.text_input("Temporalidad", key=init("temporalidad", initial["temporalidad"]), on_change=callback)
+        with short_right:
+            st.selectbox("Tipo", type_options, key=init("tipo", initial["tipo"]), on_change=callback)
+            st.selectbox("Agente promotor", [None] + promoter_ids, key=init("promotor", selected_promoter_id), on_change=callback, format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"), help="Persona o entidad que ejecutará la acción. Busca por cualquiera de los campos de la agenda.")
+            st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback)
+        st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=90)
+        st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=105)
+        long_left, long_right = st.columns(2, gap="medium")
+        with long_left:
+            st.text_area("Indicadores previstos", key=init("indicadores", initial["indicadores"]), on_change=callback, height=105)
+        with long_right:
+            st.text_area("Recursos", key=init("recursos", initial["recursos"]), on_change=callback, height=105)
     if st.button("Guardar ahora los datos de la actividad", key=f"force_save_act_{selected_id}"):
         _auto_save_activity(engine, selected_id, user_name)
         st.rerun()
@@ -4038,15 +4054,21 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
         return k
     ec = lambda: _auto_save_evaluation(engine, selected_id, user_name)
     with st.container(key="tracking_evaluation_panel"):
-        st.selectbox("Estado de evaluación", STATUS_OPTIONS, key=ek("estado", eval_initial["estado_evaluacion"]), on_change=ec)
-        st.info(safe_text(row.get("Indicadores")) or "Sin indicadores definidos.")
-        st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, key=ek("cumplimiento", eval_initial["cumplimiento_indicadores"]), on_change=ec)
-        st.selectbox("Prioridad", PRIORITY_OPTIONS, key=ek("prioridad", eval_initial["prioridad"]), on_change=ec)
-        st.date_input("Fecha de actualización", key=ek("fecha", parse_iso_date(eval_initial["fecha_actualizacion"]) or date.today()), on_change=ec)
-        st.text_area("Valoración técnica", key=ek("valoracion", eval_initial["valoracion_tecnica"]), on_change=ec)
-        st.text_area("Observaciones", key=ek("observaciones", eval_initial["observaciones"]), on_change=ec)
-        st.text_area("Riesgos / bloqueos", key=ek("riesgos", eval_initial["riesgos"]), on_change=ec)
-        st.text_area("Próximos pasos", key=ek("pasos", eval_initial["proximos_pasos"]), on_change=ec)
+        ev_left, ev_right = st.columns(2, gap="medium")
+        with ev_left:
+            st.selectbox("Estado de evaluación", STATUS_OPTIONS, key=ek("estado", eval_initial["estado_evaluacion"]), on_change=ec)
+            st.selectbox("Prioridad", PRIORITY_OPTIONS, key=ek("prioridad", eval_initial["prioridad"]), on_change=ec)
+        with ev_right:
+            st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, key=ek("cumplimiento", eval_initial["cumplimiento_indicadores"]), on_change=ec)
+            st.date_input("Fecha de actualización", key=ek("fecha", parse_iso_date(eval_initial["fecha_actualizacion"]) or date.today()), on_change=ec)
+        st.info("Indicadores previstos: " + (safe_text(row.get("Indicadores")) or "Sin indicadores definidos."))
+        notes_left, notes_right = st.columns(2, gap="medium")
+        with notes_left:
+            st.text_area("Valoración técnica", key=ek("valoracion", eval_initial["valoracion_tecnica"]), on_change=ec, height=105)
+            st.text_area("Riesgos / bloqueos", key=ek("riesgos", eval_initial["riesgos"]), on_change=ec, height=105)
+        with notes_right:
+            st.text_area("Observaciones", key=ek("observaciones", eval_initial["observaciones"]), on_change=ec, height=105)
+            st.text_area("Próximos pasos", key=ek("pasos", eval_initial["proximos_pasos"]), on_change=ec, height=105)
         st.markdown("### Links de evaluación")
         l1, l2 = st.columns(2)
         with l1:
