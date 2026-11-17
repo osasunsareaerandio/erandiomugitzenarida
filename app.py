@@ -628,7 +628,7 @@ def apply_brand_theme() -> None:
 
         /* Tipografía general: 11 pt = 14,67 px. La fuente se toma del sistema
            si está instalada; las negritas y cursivas originales se conservan. */
-        html, body, .stApp, .stApp p, .stApp span, .stApp label,
+        html, body, .stApp, .stApp p, .stApp label,
         .stApp li, .stApp a, .stApp button, .stApp input,
         .stApp textarea, .stApp select, .stApp th, .stApp td,
         .stApp [data-baseweb="select"],
@@ -651,6 +651,40 @@ def apply_brand_theme() -> None:
         .stApp .weekday-cell, .stApp .day-number,
         .stApp .day-item, .stApp .more-items {{
             font-size: 11pt !important;
+        }}
+        /* IMPORTANTE: los iconos de Streamlit son ligaduras en fuente Material.
+           Franklin Gothic en los span las convertía en texto visible: expand_more,
+           _arrow_down, help, etc. Restablecer la familia específica de iconos. */
+        .stApp [data-testid="stIconMaterial"],
+        .stApp [data-testid="stIconMaterial"] span,
+        .stApp .material-symbols-rounded,
+        .stApp .material-symbols-outlined,
+        .stApp .material-icons,
+        .stApp span[class*="material-symbols"],
+        .stApp span[class*="material-icons"] {{
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            font-size: 24px !important;
+            line-height: 1 !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
+            font-feature-settings: "liga" !important;
+            -webkit-font-feature-settings: "liga" !important;
+            -webkit-font-smoothing: antialiased !important;
+            flex-shrink: 0 !important;
+        }}
+        /* Los iconos de los encabezados y el menú no se comprimen. */
+        .stApp [data-testid="stExpander"] summary [data-testid="stIconMaterial"],
+        .stApp [data-testid="stPopover"] [data-testid="stIconMaterial"] {{
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 1.5rem !important;
+            min-width: 1.5rem !important;
         }}
         .stApp h1 {{ font-size: 1.75rem !important; }}
         .stApp h2 {{ font-size: 1.45rem !important; }}
