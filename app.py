@@ -664,6 +664,69 @@ def apply_brand_theme() -> None:
         .stApp [data-testid="stHorizontalBlock"] {{
             min-width: 0 !important;
         }}
+
+        /* Red Local de Salud: selector legible, sin textos superpuestos. */
+        .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] {{
+            width: 100% !important;
+            gap: 1rem !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="column"] {{
+            min-width: 0 !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] > div {{
+            min-height: 2.75rem !important;
+            height: auto !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] [data-baseweb="tag"] {{
+            max-width: 100% !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] [data-baseweb="tag"] span {{
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="stWidgetLabel"] {{
+            margin-bottom: .25rem !important;
+            height: auto !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="stWidgetLabel"] p {{
+            line-height: 1.35 !important;
+            white-space: normal !important;
+        }}
+        .st-key-rls_filters_panel input {{
+            min-width: 0 !important;
+            line-height: 1.5 !important;
+        }}
+        /* Alta de contactos: encabezado corporativo y formulario cerrado al entrar. */
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] {{
+            border: 2px solid var(--brand-sky) !important;
+            border-left: 7px solid var(--brand-gold) !important;
+            border-radius: .85rem !important;
+        }}
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] summary {{
+            background: #EAF6FA !important;
+            border-radius: .7rem !important;
+            padding: .8rem 1rem !important;
+        }}
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] summary p {{
+            color: var(--brand-navy) !important;
+            font-weight: 750 !important;
+            font-size: 11pt !important;
+            line-height: 1.5 !important;
+        }}
+        @media (max-width: 750px) {{
+            .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] {{
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: .6rem !important;
+            }}
+            .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
+                width: 100% !important;
+                flex: 0 0 100% !important;
+            }}
+        }}
 </style>
         """,
         unsafe_allow_html=True,
@@ -3587,10 +3650,9 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
 
     if solo_grafico_ambito:
         mostrar_grafico_circular()
-        return
-
-    with right:
-        mostrar_grafico_circular()
+    else:
+        with right:
+            mostrar_grafico_circular()
 
     st.subheader("Acciones pendientes de completar")
     pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada"])].copy()
@@ -3603,22 +3665,37 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
 
     next_steps = column_or_blank("proximos_pasos")
     fallback_steps = column_or_blank("Medida")
-    pending["Siguiente Paso"] = next_steps.where(next_steps.ne(""), fallback_steps)
+    pending["Próximo paso"] = next_steps.where(next_steps.ne(""), fallback_steps)
     display_cols = [
         "id_accion", "Ámbito", "Título", "estado_actual", "Preasignación",
-        "Agente promotor", "Siguiente Paso",
+        "Agente promotor", "Próximo paso",
     ]
     for col in display_cols:
         if col not in pending.columns:
             pending[col] = ""
-    pending = pending.sort_values(["estado_actual", "id_accion"])[display_cols].head(20)
+    pending = pending.sort_values(["estado_actual", "id_accion"])[display_cols]
     pending = pending.rename(columns={
         "id_accion": "Id_accion", "Título": "Título",
         "estado_actual": "Estado actual", "Preasignación": "Asignado a",
         "Agente promotor": "Agente Promotor",
     })
-    st.dataframe(clean_interface_dataframe(pending), use_container_width=True, hide_index=True,
-                 column_config={"Siguiente Paso": st.column_config.TextColumn("Siguiente Paso", width="large")})
+    if pending.empty:
+        st.info("No hay acciones pendientes de completar.")
+    else:
+        st.dataframe(
+            clean_interface_dataframe(pending),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Id_accion": st.column_config.NumberColumn("Id_accion", width="small"),
+                "Ámbito": st.column_config.TextColumn("Ámbito", width="medium"),
+                "Título": st.column_config.TextColumn("Título", width="large"),
+                "Estado actual": st.column_config.TextColumn("Estado actual", width="small"),
+                "Asignado a": st.column_config.TextColumn("Asignado a", width="medium"),
+                "Agente Promotor": st.column_config.TextColumn("Agente Promotor", width="medium"),
+                "Próximo paso": st.column_config.TextColumn("Próximo paso", width="large"),
+            },
+        )
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
@@ -3703,51 +3780,52 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique() if not contacts.empty else 0)
     col4.metric("Contactos asignados", assignments["contacto_id"].nunique() if not assignments.empty else 0)
 
-    st.markdown("### Añadir nueva persona a la Red Local de Salud")
-    st.info("Utiliza este formulario para registrar un nuevo contacto en la agenda.")
-    with st.expander("+ AÑADIR NUEVA PERSONA", expanded=True):
-        with st.form("add_contact_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            persona = c1.text_input("Persona")
-            entidad = c2.text_input("Entidad")
-            c3, c4 = st.columns(2)
-            categoria = c3.text_input("Categoría")
-            subcategoria = c4.text_input("Subcategoría")
-            c5, c6 = st.columns(2)
-            comision = c5.text_input("Comisión")
-            perfil = c6.text_input("Perfil")
-            c7, c8 = st.columns(2)
-            telefono = c7.text_input("Teléfono")
-            mail = c8.text_input("Mail")
-            submitted = st.form_submit_button("Añadir persona")
-        if submitted:
-            if not user_name:
-                st.error("Antes de añadir una persona, escribe tu nombre en la barra lateral.")
-            elif not safe_text(persona) and not safe_text(entidad):
-                st.error("Introduce al menos la persona o la entidad.")
-            else:
-                add_contact(engine, {
-                    "Categoria": categoria,
-                    "Subcategoria": subcategoria,
-                    "Comisión": comision,
-                    "Perfil": perfil,
-                    "Entidad": entidad,
-                    "Teléfono": telefono,
-                    "Persona": persona,
-                    "Mail": mail,
-                }, user_name)
-                st.success("Persona añadida a la Red Local de Salud.")
-                st.rerun()
+    with st.container(key="rls_add_contact_panel"):
+        with st.expander("+ AÑADIR NUEVA PERSONA", expanded=False):
+            with st.form("add_contact_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                persona = c1.text_input("Persona")
+                entidad = c2.text_input("Entidad")
+                c3, c4 = st.columns(2)
+                categoria = c3.text_input("Categoría")
+                subcategoria = c4.text_input("Subcategoría")
+                c5, c6 = st.columns(2)
+                comision = c5.text_input("Comisión")
+                perfil = c6.text_input("Perfil")
+                c7, c8 = st.columns(2)
+                telefono = c7.text_input("Teléfono")
+                mail = c8.text_input("Mail")
+                submitted = st.form_submit_button("Añadir persona")
+            if submitted:
+                if not user_name:
+                    st.error("Antes de añadir una persona, escribe tu nombre en la barra lateral.")
+                elif not safe_text(persona) and not safe_text(entidad):
+                    st.error("Introduce al menos la persona o la entidad.")
+                else:
+                    add_contact(engine, {
+                        "Categoria": categoria,
+                        "Subcategoria": subcategoria,
+                        "Comisión": comision,
+                        "Perfil": perfil,
+                        "Entidad": entidad,
+                        "Teléfono": telefono,
+                        "Persona": persona,
+                        "Mail": mail,
+                    }, user_name)
+                    st.success("Persona añadida a la Red Local de Salud.")
+                    st.rerun()
 
     if contacts.empty:
         return
 
-    with st.expander("Filtros", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
-        categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
+    with st.container(key="rls_filters_panel"):
+        with st.expander("Filtros", expanded=True):
+            c1, c2 = st.columns(2, gap="medium")
+            categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            c3, c4 = st.columns(2, gap="medium")
+            perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
 
     filtered = contacts.copy()
     if categoria:
