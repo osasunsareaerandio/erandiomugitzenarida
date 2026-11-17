@@ -3458,7 +3458,7 @@ def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFra
         "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
-    st.dataframe(df[visible_columns], use_container_width=True, hide_index=True)
+    st.dataframe(df[visible_columns].rename(columns={"Preasignación": "Asignado a", "Medida": "Próximo paso"}), use_container_width=True, hide_index=True)
 
     st.markdown("### Asignar personas de la Red Local de Salud")
     if contacts.empty:
@@ -3535,7 +3535,9 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique() if not contacts.empty else 0)
     col4.metric("Contactos asignados", assignments["contacto_id"].nunique() if not assignments.empty else 0)
 
-    with st.expander("Añadir nueva persona", expanded=contacts.empty):
+    st.markdown("### Añadir nueva persona a la Red Local de Salud")
+    st.info("Utiliza este formulario para registrar un nuevo contacto en la agenda.")
+    with st.expander("+ AÑADIR NUEVA PERSONA", expanded=True):
         with st.form("add_contact_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
             persona = c1.text_input("Persona")
@@ -3574,9 +3576,9 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
 
     with st.expander("Filtros", expanded=True):
         c1, c2, c3, c4 = st.columns(4)
-        categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]))
-        comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]))
-        perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]))
+        categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+        comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+        perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]), placeholder="Elige o escribe")
         texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
 
     filtered = contacts.copy()
@@ -3852,306 +3854,213 @@ def render_questionnaire_link_card(title: str, url: str, description: str = "") 
             label_visibility="collapsed",
         )
 
+def _auto_save_activity(engine: Engine, action_id: int, user_name: str) -> None:
+    """Guarda los valores confirmados de la ficha sin esperar a un botón."""
+    prefix = f"act_{action_id}_"
+    fields = {
+        "ambito": "ambito", "tipo": "tipo", "proximo": "medida",
+        "asignado": "preasignacion", "promotor": "agente_promotor",
+        "destinatarias": "personas_destinatarias", "temporalidad": "temporalidad",
+        "descripcion": "descripcion", "indicadores": "indicadores",
+        "recursos": "recursos", "estado": "estado_actual",
+    }
+    snapshot = st.session_state.get(f"activity_snapshot_{action_id}", {}).copy()
+    for widget_name, database_name in fields.items():
+        key = prefix + widget_name
+        if key in st.session_state:
+            value = st.session_state[key]
+            if widget_name == "promotor":
+                value = st.session_state.get(f"promoter_names_{action_id}", {}).get(value, "")
+            if widget_name == "promotor" and value == "" and st.session_state.get(key) is None:
+                value = snapshot.get(database_name, "")
+            snapshot[database_name] = value
+    snapshot["id_accion"] = action_id
+    try:
+        save_action_details(engine, snapshot, user_name)
+        st.session_state[f"activity_snapshot_{action_id}"] = snapshot
+        st.session_state.pop("unsaved_changes", None)
+        st.session_state.pop("failed_autosave", None)
+        st.session_state["last_autosave"] = datetime.now().strftime("%H:%M:%S")
+        promoter = st.session_state.get(prefix + "promotor")
+        if promoter is not None:
+            assignments = get_action_contacts(engine)
+            existing = assignments.loc[assignments["id_accion"] == action_id, "contacto_id"].astype(int).tolist() if not assignments.empty else []
+            if int(promoter) not in existing:
+                save_action_contacts(engine, action_id, existing + [int(promoter)], user_name)
+    except Exception as exc:
+        st.session_state["unsaved_changes"] = True
+        st.session_state["failed_autosave"] = ("activity", action_id)
+        st.session_state["autosave_error"] = str(exc)
+
+
+def _auto_save_evaluation(engine: Engine, action_id: int, user_name: str) -> None:
+    """Actualiza seguimiento e histórico cuando un control confirma un valor nuevo."""
+    prefix = f"eval_{action_id}_"
+    snapshot = st.session_state.get(f"evaluation_snapshot_{action_id}", {}).copy()
+    mapping = {
+        "estado": "estado_evaluacion", "cumplimiento": "cumplimiento_indicadores",
+        "prioridad": "prioridad", "fecha": "fecha_actualizacion",
+        "valoracion": "valoracion_tecnica", "observaciones": "observaciones",
+        "riesgos": "riesgos", "pasos": "proximos_pasos",
+        "link_promotora": "link_promotora", "enviado_promotora": "link_promotora_enviado",
+        "fecha_promotora": "link_promotora_fecha", "link_participante": "link_participante",
+        "enviado_participante": "link_participante_enviado",
+        "fecha_participante": "link_participante_fecha",
+    }
+    for widget_name, database_name in mapping.items():
+        key = prefix + widget_name
+        if key in st.session_state:
+            value = st.session_state[key]
+            if isinstance(value, (date, datetime)):
+                value = value.isoformat()
+            if widget_name.startswith("enviado_"):
+                value = int(bool(value))
+            snapshot[database_name] = value
+    snapshot["id_accion"] = action_id
+    snapshot["avance"] = state_to_legacy_progress(snapshot.get("estado_evaluacion", "Sin evaluar"))
+    snapshot["updated_by"] = user_name
+    # El antiguo campo Medida se conserva internamente, pero sincronizado con Próximos pasos.
+    try:
+        save_evaluation(engine, snapshot)
+        if "proximos_pasos" in snapshot:
+            detail = st.session_state.get(f"activity_snapshot_{action_id}", {}).copy()
+            detail["id_accion"] = action_id
+            detail["medida"] = snapshot["proximos_pasos"]
+            save_action_details(engine, detail, user_name)
+            st.session_state[f"activity_snapshot_{action_id}"] = detail
+        st.session_state[f"evaluation_snapshot_{action_id}"] = snapshot
+        st.session_state.pop("unsaved_changes", None)
+        st.session_state.pop("failed_autosave", None)
+        st.session_state["last_autosave"] = datetime.now().strftime("%H:%M:%S")
+    except Exception as exc:
+        st.session_state["unsaved_changes"] = True
+        st.session_state["failed_autosave"] = ("evaluation", action_id)
+        st.session_state["autosave_error"] = str(exc)
+
+
 def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     if df.empty:
         st.info("No hay acciones para los filtros seleccionados.")
         return
-
     options = df.apply(lambda row: f"{int(row['id_accion']):03d} - {row['Título']}", axis=1).tolist()
     with st.container(key="action_selector_panel"):
         st.markdown('<div class="action-selector-eyebrow">Ficha de actividad</div>', unsafe_allow_html=True)
         st.markdown('<div class="action-selector-title">Selecciona una acción</div>', unsafe_allow_html=True)
-        st.markdown('<div class="action-selector-help">Elige la actividad que quieres consultar, actualizar o evaluar.</div>', unsafe_allow_html=True)
-        selected = st.selectbox(
-            "Actividad",
-            options,
-            key="action_detail_selector",
-            label_visibility="collapsed",
-        )
-
+        selected = st.selectbox("Actividad", options, key="action_detail_selector", label_visibility="collapsed")
     selected_id = int(selected.split(" - ")[0])
     selected_rows = all_data[all_data["id_accion"] == selected_id]
     if selected_rows.empty:
-        st.warning("La acción seleccionada no está disponible para este perfil.")
+        st.warning("La actividad no está disponible para este perfil.")
         return
     row = selected_rows.iloc[0]
-    # El agente promotor se elige directamente del listado vivo de la Red Local de Salud.
     contacts = get_contacts(engine)
-    promoter_contacts = contacts[contacts["Persona"].apply(safe_text) != ""].copy() if not contacts.empty else pd.DataFrame()
-    promoter_contact_ids = promoter_contacts["contacto_id"].astype(int).tolist() if not promoter_contacts.empty else []
-    promoter_label_by_id = dict(zip(
-        promoter_contacts["contacto_id"].astype(int),
-        promoter_contacts.apply(lambda contact: safe_text(contact.get("Persona")), axis=1),
-    )) if not promoter_contacts.empty else {}
+    promoter_ids = contacts["contacto_id"].astype(int).tolist() if not contacts.empty else []
+    # Streamlit filtra el texto completo de format_func: nombre, entidad, perfil, comisión, correo, etc.
+    promoter_labels = {}
+    promoter_names = {}
+    for _, contact in contacts.iterrows():
+        cid = int(contact["contacto_id"])
+        promoter_labels[cid] = " · ".join(safe_text(contact.get(c)) for c in CONTACT_COLUMNS if safe_text(contact.get(c))) or f"Contacto {cid}"
+        promoter_names[cid] = safe_text(contact.get("Persona")) or safe_text(contact.get("Entidad"))
     current_promoter = safe_text(row.get("Agente promotor"))
-    current_promoter_id = next((
-        int(contact["contacto_id"]) for _, contact in promoter_contacts.iterrows()
-        if safe_text(contact.get("Persona")) == current_promoter
-    ), None) if not promoter_contacts.empty else None
-    promoter_select_options = [None] + promoter_contact_ids
-
+    selected_promoter_id = next((cid for cid in promoter_ids if promoter_names[cid] == current_promoter), None)
+    st.session_state[f"promoter_names_{selected_id}"] = promoter_names
+    current_status = safe_text(row.get("estado_actual")) or "No iniciada"
+    if current_status not in ACTION_STATUS_OPTIONS:
+        current_status = "No iniciada"
+    current_steps = safe_text(row.get("proximos_pasos")) or safe_text(row.get("Medida"))
+    initial = {
+        "ambito": safe_text(row.get("Ámbito")), "tipo": safe_text(row.get("Tipo")),
+        "medida": current_steps, "preasignacion": safe_text(row.get("Preasignación")),
+        "agente_promotor": current_promoter, "personas_destinatarias": safe_text(row.get("Personas destinatarias")),
+        "temporalidad": safe_text(row.get("Temporalidad")), "descripcion": safe_text(row.get("Descripción")),
+        "indicadores": safe_text(row.get("Indicadores")), "recursos": safe_text(row.get("Recursos")),
+        "estado_actual": current_status,
+    }
+    st.session_state.setdefault(f"activity_snapshot_{selected_id}", initial)
+    callback = lambda: _auto_save_activity(engine, selected_id, user_name)
+    def key(name): return f"act_{selected_id}_{name}"
+    def init(name, value):
+        st.session_state.setdefault(key(name), value)
+        return key(name)
     st.subheader(safe_text(row.get("Título")))
-    st.caption("Información general de la actividad. Los campos editables se guardan en la base de datos; Estado original permanece bloqueado.")
-
-    scope_options = sorted({safe_text(value) for value in all_data["Ámbito"].tolist() if safe_text(value)})
-    type_options = sorted({safe_text(value) for value in all_data["Tipo"].tolist() if safe_text(value)})
-    current_scope = safe_text(row.get("Ámbito"))
-    current_type = safe_text(row.get("Tipo"))
-    if current_scope and current_scope not in scope_options:
-        scope_options.append(current_scope)
-        scope_options = sorted(scope_options)
-    if current_type and current_type not in type_options:
-        type_options.append(current_type)
-        type_options = sorted(type_options)
-
-    current_estado_actual = safe_text(row.get("estado_actual")) or "No iniciada"
-    if current_estado_actual not in ACTION_STATUS_OPTIONS:
-        current_estado_actual = "No iniciada"
-
-    with st.form(f"activity_info_form_{selected_id}"):
-        st.markdown("### Datos de la actividad")
-        st.caption("Actualiza la información de la actividad. El Estado original se conserva como dato de referencia y no puede modificarse.")
-
-        with st.container(border=True):
+    st.caption("Guardado automático al confirmar cada campo. El Estado original se mantiene en los datos, pero no se muestra.")
+    if st.session_state.get("autosave_error"):
+        st.error("No se pudo guardar el último cambio: " + st.session_state.pop("autosave_error"))
+    elif st.session_state.get("last_autosave"):
+        st.caption("Último guardado automático: " + st.session_state["last_autosave"])
+    st.markdown("### Datos de la actividad")
+    with st.container(border=True):
+        scope_options = sorted(set(safe_text(v) for v in all_data["Ámbito"] if safe_text(v)) | {initial["ambito"]})
+        type_options = sorted(set(safe_text(v) for v in all_data["Tipo"] if safe_text(v)) | {initial["tipo"]})
+        def display(label, widget):
             left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Ámbito**")
-            ambito_edit = right.selectbox(
-                "Ámbito",
-                scope_options,
-                index=scope_options.index(current_scope) if current_scope in scope_options else 0,
-                label_visibility="collapsed",
-            )
+            left.markdown(f"**{label}**")
+            with right:
+                widget()
+        display("Ámbito", lambda: st.selectbox("Ámbito", scope_options, key=init("ambito", initial["ambito"]), on_change=callback, label_visibility="collapsed"))
+        display("Tipo", lambda: st.selectbox("Tipo", type_options, key=init("tipo", initial["tipo"]), on_change=callback, label_visibility="collapsed"))
+        display("Estado actual", lambda: st.selectbox("Estado actual", ACTION_STATUS_OPTIONS, key=init("estado", current_status), on_change=callback, label_visibility="collapsed"))
+        display("Próximo paso", lambda: st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=110, label_visibility="collapsed"))
+        display("Asignado a", lambda: st.text_input("Asignado a", key=init("asignado", initial["preasignacion"]), on_change=callback, label_visibility="collapsed"))
+        display("Agente promotor", lambda: st.selectbox("Agente promotor", [None] + promoter_ids, key=init("promotor", selected_promoter_id), on_change=callback, format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"), label_visibility="collapsed", help="Persona o entidad que ejecutará la acción. Busca por cualquiera de los campos de la agenda."))
+        display("Personas destinatarias", lambda: st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback, label_visibility="collapsed"))
+        display("Temporalidad", lambda: st.text_input("Temporalidad", key=init("temporalidad", initial["temporalidad"]), on_change=callback, label_visibility="collapsed"))
+        display("Descripción", lambda: st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=110, label_visibility="collapsed"))
+        display("Indicadores previstos", lambda: st.text_area("Indicadores previstos", key=init("indicadores", initial["indicadores"]), on_change=callback, height=110, label_visibility="collapsed"))
+        display("Recursos", lambda: st.text_area("Recursos", key=init("recursos", initial["recursos"]), on_change=callback, height=90, label_visibility="collapsed"))
+    if st.button("Guardar ahora los datos de la actividad", key=f"force_save_act_{selected_id}"):
+        _auto_save_activity(engine, selected_id, user_name)
+        st.rerun()
 
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Tipo**")
-            tipo_edit = right.selectbox(
-                "Tipo",
-                type_options,
-                index=type_options.index(current_type) if current_type in type_options else 0,
-                label_visibility="collapsed",
-            )
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Estado original**")
-            right.text_input(
-                "Estado original",
-                value=safe_text(row.get("Estado")),
-                disabled=True,
-                label_visibility="collapsed",
-                help="Dato procedente de la matriz original. No se puede modificar.",
-            )
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Estado actual**")
-            estado_actual_edit = right.selectbox(
-                "Estado actual",
-                ACTION_STATUS_OPTIONS,
-                index=ACTION_STATUS_OPTIONS.index(current_estado_actual),
-                label_visibility="collapsed",
-            )
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Medida**")
-            medida_value = safe_text(row.get("Medida"))
-            medida_height = max(68, min(220, 52 + ((len(medida_value) // 42) + 1) * 22))
-            medida_edit = right.text_area(
-                "Medida",
-                value=medida_value,
-                height=medida_height,
-                label_visibility="collapsed",
-                help="El campo se adapta para facilitar la lectura completa en móvil.",
-            )
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Preasignación**")
-            preasignacion_edit = right.text_input(
-                "Preasignación",
-                value=safe_text(row.get("Preasignación")),
-                label_visibility="collapsed",
-                help="Entidad o agente previsto inicialmente en la matriz.",
-            )
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Agente Promotor**")
-            agente_contacto_id = right.selectbox(
-                "Agente Promotor",
-                promoter_select_options,
-                index=promoter_select_options.index(current_promoter_id) if current_promoter_id in promoter_select_options else 0,
-                format_func=lambda contacto_id: "Sin asignar" if contacto_id is None else promoter_label_by_id.get(int(contacto_id), "Contacto RLS"),
-                label_visibility="collapsed",
-                help="El listado se sincroniza con las personas de la pestaña Red Local de Salud.",
-            )
-            agente_edit = promoter_label_by_id.get(int(agente_contacto_id), "") if agente_contacto_id is not None else ""
-            if not promoter_contact_ids:
-                right.caption("No hay personas con nombre en el listado de la Red Local de Salud.")
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Personas destinatarias**")
-            destinatarias_edit = right.text_input("Personas destinatarias", value=safe_text(row.get("Personas destinatarias")), label_visibility="collapsed")
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="center")
-            left.markdown("**Temporalidad**")
-            temporalidad_edit = right.text_input("Temporalidad", value=safe_text(row.get("Temporalidad")), label_visibility="collapsed")
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
-            left.markdown("**Descripción**")
-            descripcion_edit = right.text_area("Descripción", value=safe_text(row.get("Descripción")), height=110, label_visibility="collapsed")
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
-            left.markdown("**Indicadores previstos**")
-            indicadores_edit = right.text_area("Indicadores previstos", value=safe_text(row.get("Indicadores")), height=110, label_visibility="collapsed")
-
-            left, right = st.columns([1.05, 2.4], vertical_alignment="top")
-            left.markdown("**Recursos**")
-            recursos_edit = right.text_area("Recursos", value=safe_text(row.get("Recursos")), height=90, label_visibility="collapsed")
-
-        save_activity = st.form_submit_button("Guardar información de la actividad", type="primary")
-
-    if save_activity:
-        if not user_name:
-            st.error("Antes de guardar, entra con un perfil identificado.")
-        else:
-            save_action_details(engine, {
-                "id_accion": selected_id,
-                "ambito": ambito_edit,
-                "tipo": tipo_edit,
-                "medida": medida_edit,
-                "preasignacion": preasignacion_edit,
-                "agente_promotor": agente_edit,
-                "personas_destinatarias": destinatarias_edit,
-                "temporalidad": temporalidad_edit,
-                "descripcion": descripcion_edit,
-                "indicadores": indicadores_edit,
-                "recursos": recursos_edit,
-                "estado_actual": estado_actual_edit,
-            }, user_name)
-            # El agente promotor también queda vinculado como persona asignada a la acción.
-            # Se conservan las demás asignaciones hechas desde la matriz.
-            if agente_contacto_id is not None:
-                current_assignments = get_action_contacts(engine)
-                existing_ids = current_assignments.loc[
-                    current_assignments["id_accion"] == selected_id, "contacto_id"
-                ].astype(int).tolist() if not current_assignments.empty else []
-                save_action_contacts(engine, selected_id, existing_ids + [int(agente_contacto_id)], user_name)
-            st.success("Información de la actividad actualizada.")
-            st.rerun()
-
-    indicadores_matriz = safe_text(row.get("Indicadores", ""))
-    current_estado = safe_text(row.get("estado_evaluacion")) or "Sin evaluar"
-    current_cumplimiento = safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar"
-    current_priority = safe_text(row.get("prioridad")) or "Media"
-
+    st.markdown("### Seguimiento de la acción y evaluación")
+    eval_initial = {
+        "estado_evaluacion": safe_text(row.get("estado_evaluacion")) or "Sin evaluar",
+        "estado_actual": current_status, "cumplimiento_indicadores": safe_text(row.get("cumplimiento_indicadores")) or "Sin evaluar",
+        "valoracion_tecnica": safe_text(row.get("valoracion_tecnica")), "observaciones": safe_text(row.get("observaciones")),
+        "responsable_seguimiento": safe_text(row.get("responsable_seguimiento")),
+        "fecha_actualizacion": safe_text(row.get("fecha_actualizacion")) or date.today().isoformat(),
+        "evidencias": safe_text(row.get("evidencias")), "riesgos": safe_text(row.get("riesgos")),
+        "proximos_pasos": safe_text(row.get("proximos_pasos")) or current_steps,
+        "prioridad": safe_text(row.get("prioridad")) or "Media",
+        "link_promotora": safe_text(row.get("link_promotora")) or build_questionnaire_link(selected_id, "promotora"),
+        "link_promotora_enviado": int(bool(row.get("link_promotora_enviado") or False)),
+        "link_promotora_fecha": safe_text(row.get("link_promotora_fecha")),
+        "link_participante": safe_text(row.get("link_participante")) or build_questionnaire_link(selected_id, "participante"),
+        "link_participante_enviado": int(bool(row.get("link_participante_enviado") or False)),
+        "link_participante_fecha": safe_text(row.get("link_participante_fecha")),
+    }
+    st.session_state.setdefault(f"evaluation_snapshot_{selected_id}", eval_initial)
+    prefix = f"eval_{selected_id}_"
+    def ek(name, value):
+        k = prefix + name
+        st.session_state.setdefault(k, value)
+        return k
+    ec = lambda: _auto_save_evaluation(engine, selected_id, user_name)
     with st.container(key="tracking_evaluation_panel"):
-        st.markdown('<div class="tracking-evaluation-title">Seguimiento de la acción y evaluación</div>', unsafe_allow_html=True)
-        with st.form("evaluation_form"):
-            estado_evaluacion = st.selectbox(
-                "Estado de evaluación",
-                STATUS_OPTIONS,
-                index=STATUS_OPTIONS.index(current_estado) if current_estado in STATUS_OPTIONS else 0,
-            )
-            st.markdown("#### Cumplimiento de indicadores")
-            st.caption("Indicadores previstos para esta actividad")
-            st.info(indicadores_matriz or "Sin indicadores definidos.")
-            cumplimiento = st.selectbox(
-                "Valoración del cumplimiento",
-                INDICATOR_OPTIONS,
-                index=INDICATOR_OPTIONS.index(current_cumplimiento) if current_cumplimiento in INDICATOR_OPTIONS else 0,
-            )
-            prioridad = st.selectbox(
-                "Prioridad",
-                PRIORITY_OPTIONS,
-                index=PRIORITY_OPTIONS.index(current_priority) if current_priority in PRIORITY_OPTIONS else 1,
-            )
-            fecha_value = safe_text(row.get("fecha_actualizacion"))
-            try:
-                parsed_date = datetime.fromisoformat(fecha_value).date() if fecha_value else date.today()
-            except ValueError:
-                parsed_date = date.today()
-            fecha_actualizacion = st.date_input("Fecha de actualización", value=parsed_date)
-            valoracion = st.text_area("Valoración técnica", value=safe_text(row.get("valoracion_tecnica")), height=100)
-            observaciones = st.text_area("Observaciones", value=safe_text(row.get("observaciones")), height=100)
-            riesgos = st.text_area("Riesgos / bloqueos", value=safe_text(row.get("riesgos")), height=80)
-            proximos_pasos = st.text_area("Próximos pasos", value=safe_text(row.get("proximos_pasos")), height=80)
-
-            st.markdown("### Links de evaluación")
-            st.caption("La aplicación genera enlaces propios de cuestionario para recoger valoraciones externas.")
-            generated_promotora = build_questionnaire_link(selected_id, "promotora")
-            generated_participante = build_questionnaire_link(selected_id, "participante")
-            current_link_promotora = safe_text(row.get("link_promotora")) or generated_promotora
-            current_link_participante = safe_text(row.get("link_participante")) or generated_participante
-
-            l1, l2 = st.columns(2)
-            with l1:
-                render_questionnaire_link_card(
-                    "Persona Promotora",
-                    current_link_promotora,
-                    "Formulario para la entidad o persona que promueve o coordina la actividad.",
-                )
-                link_promotora = st.text_input(
-                    "Enlace guardado - Persona Promotora",
-                    value=current_link_promotora,
-                    help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
-                )
-                link_promotora_enviado = st.checkbox(
-                    "Enviado a Persona Promotora",
-                    value=bool(row.get("link_promotora_enviado") or False),
-                )
-                promotora_fecha_value = safe_text(row.get("link_promotora_fecha"))
-                try:
-                    promotora_date = datetime.fromisoformat(promotora_fecha_value).date() if promotora_fecha_value else date.today()
-                except ValueError:
-                    promotora_date = date.today()
-                link_promotora_fecha = st.date_input("Fecha de envío a Persona Promotora", value=promotora_date)
-            with l2:
-                render_questionnaire_link_card(
-                    "Persona participante",
-                    current_link_participante,
-                    "Formulario para las personas que han participado o se han apuntado a la actividad.",
-                )
-                link_participante = st.text_input(
-                    "Enlace guardado - Persona participante",
-                    value=current_link_participante,
-                    help="Puedes sustituirlo por un enlace externo si alguna acción usa otro formulario.",
-                )
-                link_participante_enviado = st.checkbox(
-                    "Enviado a Persona participante",
-                    value=bool(row.get("link_participante_enviado") or False),
-                )
-                participante_fecha_value = safe_text(row.get("link_participante_fecha"))
-                try:
-                    participante_date = datetime.fromisoformat(participante_fecha_value).date() if participante_fecha_value else date.today()
-                except ValueError:
-                    participante_date = date.today()
-                link_participante_fecha = st.date_input("Fecha de envío a Persona participante", value=participante_date)
-
-            submitted = st.form_submit_button("Guardar seguimiento y evaluación")
-
-        if submitted:
-            if not user_name:
-                st.error("Antes de guardar, entra con un perfil identificado.")
-                return
-            save_evaluation(engine, {
-                "id_accion": selected_id,
-                "avance": state_to_legacy_progress(estado_evaluacion),
-                "estado_evaluacion": estado_evaluacion,
-                "estado_actual": current_estado_actual,
-                "cumplimiento_indicadores": cumplimiento,
-                "valoracion_tecnica": valoracion,
-                "observaciones": observaciones,
-                "fecha_actualizacion": fecha_actualizacion.isoformat(),
-                "evidencias": "",
-                "riesgos": riesgos,
-                "proximos_pasos": proximos_pasos,
-                "prioridad": prioridad,
-                "link_promotora": link_promotora,
-                "link_promotora_enviado": int(link_promotora_enviado),
-                "link_promotora_fecha": link_promotora_fecha.isoformat() if link_promotora_enviado else "",
-                "link_participante": link_participante,
-                "link_participante_enviado": int(link_participante_enviado),
-                "link_participante_fecha": link_participante_fecha.isoformat() if link_participante_enviado else "",
-                "updated_by": user_name,
-            })
-            st.success("Seguimiento y evaluación guardados y añadidos al histórico.")
+        st.selectbox("Estado de evaluación", STATUS_OPTIONS, key=ek("estado", eval_initial["estado_evaluacion"]), on_change=ec)
+        st.info(safe_text(row.get("Indicadores")) or "Sin indicadores definidos.")
+        st.selectbox("Valoración del cumplimiento", INDICATOR_OPTIONS, key=ek("cumplimiento", eval_initial["cumplimiento_indicadores"]), on_change=ec)
+        st.selectbox("Prioridad", PRIORITY_OPTIONS, key=ek("prioridad", eval_initial["prioridad"]), on_change=ec)
+        st.date_input("Fecha de actualización", key=ek("fecha", parse_iso_date(eval_initial["fecha_actualizacion"]) or date.today()), on_change=ec)
+        st.text_area("Valoración técnica", key=ek("valoracion", eval_initial["valoracion_tecnica"]), on_change=ec)
+        st.text_area("Observaciones", key=ek("observaciones", eval_initial["observaciones"]), on_change=ec)
+        st.text_area("Riesgos / bloqueos", key=ek("riesgos", eval_initial["riesgos"]), on_change=ec)
+        st.text_area("Próximos pasos", key=ek("pasos", eval_initial["proximos_pasos"]), on_change=ec)
+        st.markdown("### Links de evaluación")
+        l1, l2 = st.columns(2)
+        with l1:
+            render_questionnaire_link_card("Persona Promotora", eval_initial["link_promotora"])
+            st.text_input("Enlace guardado - Persona Promotora", key=ek("link_promotora", eval_initial["link_promotora"]), on_change=ec)
+            st.checkbox("Enviado a Persona Promotora", key=ek("enviado_promotora", bool(eval_initial["link_promotora_enviado"])), on_change=ec)
+            st.date_input("Fecha de envío a Persona Promotora", key=ek("fecha_promotora", parse_iso_date(eval_initial["link_promotora_fecha"]) or date.today()), on_change=ec)
+        with l2:
+            render_questionnaire_link_card("Persona participante", eval_initial["link_participante"])
+            st.text_input("Enlace guardado - Persona participante", key=ek("link_participante", eval_initial["link_participante"]), on_change=ec)
+            st.checkbox("Enviado a Persona participante", key=ek("enviado_participante", bool(eval_initial["link_participante_enviado"])), on_change=ec)
+            st.date_input("Fecha de envío a Persona participante", key=ek("fecha_participante", parse_iso_date(eval_initial["link_participante_fecha"]) or date.today()), on_change=ec)
+        if st.button("Guardar ahora seguimiento y evaluación", key=f"force_save_eval_{selected_id}"):
+            _auto_save_evaluation(engine, selected_id, user_name)
             st.rerun()
 
     st.markdown("### Repositorio documental de la actividad")
@@ -4278,22 +4187,57 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
 
 
 
-def render_navigation(available_pages: list[str]) -> str:
-    """Navegación rápida.
+def _navigation_changed() -> None:
+    """Impide navegar si un cambio confirmado no pudo guardarse."""
+    previous = st.session_state.get("last_safe_page")
+    requested = st.session_state.get("main_navigation")
+    if previous and requested != previous and st.session_state.get("unsaved_changes"):
+        st.session_state["pending_page"] = requested
+        st.session_state["main_navigation"] = previous
+    else:
+        st.session_state["last_safe_page"] = requested
+        st.session_state.pop("pending_page", None)
 
-    Se usa radio horizontal en lugar de st.tabs porque st.tabs ejecuta el contenido
-    de todas las pestañas en cada interacción. Esta navegación solo calcula la
-    página activa, por lo que reduce consultas a Supabase y acelera la app.
-    """
-    st.markdown("""
-    <div class="nav-helper">Selecciona el apartado de trabajo</div>
-    """, unsafe_allow_html=True)
+
+def render_navigation(available_pages: list[str]) -> str:
+    """Navegación con protección frente a errores de autoguardado."""
+    st.markdown('<div class="nav-helper">Selecciona el apartado de trabajo</div>', unsafe_allow_html=True)
+    pending = st.session_state.get("pending_page")
+    if pending:
+        st.warning(f"Hay cambios pendientes de guardar. ¿Quieres guardarlos antes de ir a «{pending}»?")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Guardar y cambiar", key="nav_save_pending", type="primary"):
+                failed = st.session_state.get("failed_autosave")
+                if failed:
+                    kind, action_id = failed
+                    if kind == "activity":
+                        _auto_save_activity(get_engine(), action_id, safe_text(st.session_state.get("user_name")))
+                    else:
+                        _auto_save_evaluation(get_engine(), action_id, safe_text(st.session_state.get("user_name")))
+                if not st.session_state.get("unsaved_changes"):
+                    st.session_state["main_navigation"] = pending
+                    st.session_state["last_safe_page"] = pending
+                    st.session_state.pop("pending_page", None)
+                    st.rerun()
+                else:
+                    st.error("No se han podido guardar los cambios. La navegación permanece bloqueada.")
+        with col2:
+            if st.button("Salir sin guardar", key="nav_discard_pending"):
+                st.session_state.pop("unsaved_changes", None)
+                st.session_state.pop("failed_autosave", None)
+                st.session_state["main_navigation"] = pending
+                st.session_state["last_safe_page"] = pending
+                st.session_state.pop("pending_page", None)
+                st.rerun()
+    elif st.session_state.get("unsaved_changes"):
+        st.warning("El último cambio no se ha podido guardar. Revisa el aviso antes de salir de este apartado.")
+    if st.session_state.get("main_navigation") not in available_pages:
+        st.session_state["main_navigation"] = available_pages[0]
+        st.session_state["last_safe_page"] = available_pages[0]
     return st.radio(
-        "Apartado",
-        available_pages,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="main_navigation",
+        "Apartado", available_pages, horizontal=True,
+        label_visibility="collapsed", key="main_navigation", on_change=_navigation_changed,
     )
 
 
