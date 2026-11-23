@@ -3523,60 +3523,72 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> None:
-    """Panel general completo o gráfico circular exclusivo para perfiles de ámbito."""
+def render_dashboard(df: pd.DataFrame) -> None:
     chart_df = df.copy()
+
+    # Limpieza específica para gráficos: evita categorías técnicas como
+    # undefined/null/nan y no las convierte en leyenda visible.
     chart_df["Ámbito"] = chart_df["Ámbito"].apply(safe_text)
     chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].apply(safe_text)
     chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].where(
-        chart_df["estado_evaluacion"].isin(STATUS_OPTIONS), "Sin evaluar"
+        chart_df["estado_evaluacion"].isin(STATUS_OPTIONS),
+        "Sin evaluar",
     )
     chart_df["estado_actual"] = chart_df["estado_actual"].apply(safe_text)
     chart_df["estado_actual"] = chart_df["estado_actual"].where(
-        chart_df["estado_actual"].isin(ACTION_STATUS_OPTIONS), "No iniciada"
+        chart_df["estado_actual"].isin(ACTION_STATUS_OPTIONS),
+        "No iniciada",
     )
 
-    # Perfiles de Alimentación, Deporte, Educación, Ocio y Bienestar emocional:
-    # únicamente gráfico de queso con las acciones de su ámbito.
-    if not solo_grafico_ambito:
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Acciones filtradas", len(chart_df))
-        col2.metric("Iniciadas", int((chart_df["estado_actual"] == "Iniciada").sum()))
-        col3.metric("Completadas", int((chart_df["estado_actual"] == "Completada").sum()))
-        col4.metric("No iniciadas", int((chart_df["estado_actual"] == "No iniciada").sum()))
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Acciones filtradas", len(chart_df))
+    col2.metric("Iniciadas", int((chart_df["estado_actual"] == "Iniciada").sum()))
+    col3.metric("Completadas", int((chart_df["estado_actual"] == "Completada").sum()))
+    col4.metric("No iniciadas", int((chart_df["estado_actual"] == "No iniciada").sum()))
 
-        left, right = st.columns(2)
-        with left:
-            st.subheader("Acciones por ámbito y estado actual")
-            chart_data = (
-                chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
-                .groupby(["Ámbito", "estado_actual"], dropna=False)
-                .size().reset_index(name="acciones")
+    left, right = st.columns(2)
+    with left:
+        st.subheader("Acciones por ámbito y estado actual")
+        chart_data = (
+            chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
+            .groupby(["Ámbito", "estado_actual"], dropna=False)
+            .size()
+            .reset_index(name="acciones")
+        )
+        if not chart_data.empty:
+            fig = px.bar(
+                chart_data,
+                x="Ámbito",
+                y="acciones",
+                color="estado_actual",
+                text="acciones",
+                barmode="stack",
+                category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
+                color_discrete_sequence=BRAND_COLORS,
+                labels={
+                    "Ámbito": "Ámbito",
+                    "acciones": "Acciones",
+                    "estado_actual": "Estado actual",
+                },
             )
-            if not chart_data.empty:
-                fig = px.bar(
-                    chart_data, x="Ámbito", y="acciones", color="estado_actual",
-                    text="acciones", barmode="stack",
-                    category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
-                    color_discrete_sequence=BRAND_COLORS,
-                    labels={"Ámbito": "Ámbito", "acciones": "Acciones", "estado_actual": "Estado actual"},
-                )
-                fig.update_traces(textposition="inside")
-                st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
-            else:
-                st.info("No hay datos suficientes para mostrar este gráfico.")
-
-    def mostrar_grafico_circular() -> None:
+            fig.update_traces(textposition="inside")
+            st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para mostrar este gráfico.")
+    with right:
         st.subheader("Estado actual de las acciones")
         chart_data = (
             chart_df[chart_df["estado_actual"].astype(str).str.strip() != ""]
             .groupby("estado_actual", dropna=False)
-            .size().reset_index(name="acciones")
+            .size()
+            .reset_index(name="acciones")
         )
         chart_data = chart_data[chart_data["estado_actual"].isin(ACTION_STATUS_OPTIONS)]
         if not chart_data.empty:
             fig = px.pie(
-                chart_data, names="estado_actual", values="acciones",
+                chart_data,
+                names="estado_actual",
+                values="acciones",
                 category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
                 color_discrete_sequence=BRAND_COLORS,
                 labels={"estado_actual": "Estado actual", "acciones": "Acciones"},
@@ -3585,40 +3597,10 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
         else:
             st.info("No hay datos suficientes para mostrar este gráfico.")
 
-    if solo_grafico_ambito:
-        mostrar_grafico_circular()
-        return
-
-    with right:
-        mostrar_grafico_circular()
-
     st.subheader("Acciones pendientes de completar")
-    pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada"])].copy()
-    # La edición de la ficha y la evaluación pueden guardar el siguiente paso en
-    # campos distintos. Se prioriza el de evaluación, como hace la ficha.
-    def column_or_blank(name: str) -> pd.Series:
-        if name in pending.columns:
-            return pending[name].apply(safe_text)
-        return pd.Series("", index=pending.index, dtype="object")
-
-    next_steps = column_or_blank("proximos_pasos")
-    fallback_steps = column_or_blank("Medida")
-    pending["Siguiente Paso"] = next_steps.where(next_steps.ne(""), fallback_steps)
-    display_cols = [
-        "id_accion", "Ámbito", "Título", "estado_actual", "Preasignación",
-        "Agente promotor", "Siguiente Paso",
-    ]
-    for col in display_cols:
-        if col not in pending.columns:
-            pending[col] = ""
-    pending = pending.sort_values(["estado_actual", "id_accion"])[display_cols].head(20)
-    pending = pending.rename(columns={
-        "id_accion": "Id_accion", "Título": "Título",
-        "estado_actual": "Estado actual", "Preasignación": "Asignado a",
-        "Agente promotor": "Agente Promotor",
-    })
-    st.dataframe(clean_interface_dataframe(pending), use_container_width=True, hide_index=True,
-                 column_config={"Siguiente Paso": st.column_config.TextColumn("Siguiente Paso", width="large")})
+    columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_actual", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
+    pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada"])]
+    st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_actual", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
@@ -4667,7 +4649,7 @@ def main() -> None:
     selected_page = render_navigation(available_pages)
 
     if selected_page == "Panel general":
-        render_dashboard(filtered, solo_grafico_ambito=current_profile in eje_profiles)
+        render_dashboard(filtered)
 
     elif selected_page == "Matriz":
         with st.spinner("Cargando asignaciones y contactos..."):
