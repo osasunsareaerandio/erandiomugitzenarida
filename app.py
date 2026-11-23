@@ -43,7 +43,18 @@ STATUS_OPTIONS = ["Sin evaluar", "Iniciado", "Completado", "No procede"]
 ACTION_STATUS_OPTIONS = ["No iniciada", "Iniciada", "Completada", "No procede"]
 INDICATOR_OPTIONS = ["Sin evaluar", "Parcial", "Cumplido", "No procede"]
 PRIORITY_OPTIONS = ["Baja", "Media", "Alta", "Crítica"]
-TASK_STATUS_OPTIONS = ["No iniciado", "En curso", "Completado", "Descartado"]
+TASK_STATUS_OPTIONS = ["No iniciada", "Iniciada", "Pendiente respuesta", "Completada", "Postpuesta", "Descartada"]
+TASK_STATUS_LEGACY = {"No iniciado": "No iniciada", "En curso": "Iniciada", "Completado": "Completada", "Descartado": "Descartada"}
+TASK_COLORS = {"No iniciada": ("#DCEAF5", "#245F85"), "Iniciada": ("#FFF1B8", "#806000"), "Pendiente respuesta": ("#EAD9EC", "#703D57"), "Completada": ("#D7EBDD", "#286A48"), "Postpuesta": ("#FFE1C8", "#945124"), "Descartada": ("#F9D5D8", "#9B2638")}
+
+def task_status(value: Any) -> str:
+    return TASK_STATUS_LEGACY.get(safe_text(value), safe_text(value) or "No iniciada")
+
+def status_chip(value: Any) -> str:
+    status = task_status(value)
+    bg, fg = TASK_COLORS.get(status, ("#EAF0F0", "#334A4B"))
+    return f'<span style="background:{bg};color:{fg};border-radius:999px;padding:4px 11px;font-weight:700;white-space:nowrap">{html.escape(status)}</span>'
+
 EVENT_TYPE_OPTIONS = ["Evento", "Reunión", "Actividad", "Hito", "Otro"]
 CALENDAR_ITEM_TYPES = ["Todos", "Eventos/Reuniones", "Tareas"]
 CHALLENGE_STATUS_OPTIONS = ["Pendiente de valorar", "En análisis", "Incorporado a planificación", "En curso", "Completado", "Descartado"]
@@ -53,11 +64,11 @@ LIKERT_SELECT_OPTIONS = ["Sin marcar", 1, 2, 3, 4, 5]
 YES_NO_OPTIONS = ["Sin responder", "Sí", "No", "No procede"]
 
 # Paleta corporativa Erandio Mugitzen ari da!
-COLOR_NAVY = "#1C3054"
-COLOR_SKY = "#32A4CF"
-COLOR_CORAL = "#E95C47"
-COLOR_MAUVE = "#AE7CAA"
-COLOR_GOLD = "#F9C14F"
+COLOR_NAVY = "#547B7D"
+COLOR_SKY = "#ABC8B9"
+COLOR_CORAL = "#F58C6F"
+COLOR_MAUVE = "#703D57"
+COLOR_GOLD = "#F58C6F"
 BRAND_COLORS = [COLOR_NAVY, COLOR_SKY, COLOR_CORAL, COLOR_MAUVE, COLOR_GOLD]
 
 # Perfiles de acceso. Las claves reales se pueden cambiar desde Streamlit Secrets.
@@ -828,6 +839,24 @@ def apply_brand_theme() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+def apply_intranet_polish() -> None:
+    st.markdown("""<style>
+    .stApp,[data-testid="stAppViewContainer"] {background:#FDF8F0 !important;}
+    .main .block-container {max-width:1440px !important;}
+    .brand-header,.session-strip,[data-testid="stMetric"],div[data-testid="stExpander"],
+    div[data-testid="stDataFrame"],div[data-testid="stDataEditor"]{
+      background:#FFFFFF !important;border:1px solid #DDE7E0 !important;
+      border-radius:17px !important;box-shadow:0 4px 18px rgba(84,123,125,.075) !important;
+    }
+    .brand-header{border-top:5px solid #F58C6F !important;}
+    .stButton > button,.stDownloadButton > button {background:#547B7D !important;border-color:#547B7D !important;}
+    .stButton > button:hover {background:#703D57 !important;border-color:#703D57 !important;}
+    div[role="radiogroup"] label{background:#FFF !important;border-color:#ABC8B9 !important;}
+    div[role="radiogroup"] label:has(input:checked){background:#E3EFE9 !important;border-color:#547B7D !important;}
+    .stApp h1,.stApp h2,.stApp h3 {color:#703D57 !important;}
+    .stApp [data-testid="stDataFrame"],.stApp [data-testid="stDataEditor"] {--gdg-bg-header:#E1EEE7;}
+    </style>""",unsafe_allow_html=True)
 
 def apply_plotly_brand_layout(fig):
     """Normaliza colores y estilo de gráficos Plotly con la paleta corporativa."""
@@ -2327,7 +2356,7 @@ def save_task_overrides(engine: Engine, tasks_df: pd.DataFrame, user_name: str) 
                 "task_key": task_key,
                 "descripcion": safe_text(row.get("Descripción")),
                 "fecha_vencimiento": safe_text(row.get("Fecha de vencimiento")),
-                "estado": safe_text(row.get("Estado")) or "No iniciado",
+                "estado": task_status(row.get("Estado")),
                 "contacto_id": parse_contact_id_from_label(row.get("Contacto RLS")) or parse_optional_int(row.get("contacto_id")),
                 "updated_by": user_name,
                 "updated_at": now,
@@ -2370,7 +2399,7 @@ def add_manual_task(engine: Engine, payload: dict[str, Any], user_name: str) -> 
         "contacto_id": payload.get("contacto_id"),
         "fecha_peticion": safe_text(payload.get("fecha_peticion")),
         "fecha_vencimiento": safe_text(payload.get("fecha_vencimiento")),
-        "estado": safe_text(payload.get("estado")) or "No iniciado",
+        "estado": task_status(payload.get("estado")),
         "created_by": user_name,
         "created_at": now,
         "updated_by": user_name,
@@ -2410,7 +2439,7 @@ def update_manual_tasks(engine: Engine, tasks_df: pd.DataFrame, user_name: str) 
                 "contacto_id": parse_contact_id_from_label(row.get("Contacto RLS")) or parse_optional_int(row.get("contacto_id")),
                 "fecha_peticion": safe_text(row.get("fecha_peticion")),
                 "fecha_vencimiento": safe_text(row.get("fecha_vencimiento")),
-                "estado": safe_text(row.get("estado")) or "No iniciado",
+                "estado": task_status(row.get("estado")),
                 "updated_by": user_name,
                 "updated_at": now,
             }
@@ -2458,7 +2487,7 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
         default_request_date = safe_text(row.get("fecha_actualizacion")) or safe_text(row.get("updated_at")) or date.today().isoformat()
         rows.append({
             "task_key": task_key,
-            "Id_acción + Título": f"{id_accion:03d} - {safe_text(row.get('Título'))}",
+            "Id_acción + Título": safe_text(row.get("Título")),
             "Próximos pasos": next_steps,
             "Descripción": safe_text(override.get("descripcion")) if override is not None else "",
             "Responsable de seguimiento": safe_text(row.get("responsable_seguimiento")),
@@ -2466,7 +2495,7 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
             "Contacto RLS": "",
             "Fecha de petición": default_request_date[:10],
             "Fecha de vencimiento": safe_text(override.get("fecha_vencimiento")) if override is not None else "",
-            "Estado": safe_text(override.get("estado")) if override is not None else "No iniciado",
+            "Estado": task_status(override.get("estado")) if override is not None else "No iniciada",
         })
     df = pd.DataFrame(rows)
     if df.empty:
@@ -2474,7 +2503,7 @@ def build_action_task_rows(data: pd.DataFrame, overrides: pd.DataFrame) -> pd.Da
             "task_key", "Id_acción + Título", "Próximos pasos", "Descripción", "Responsable de seguimiento",
             "contacto_id", "Contacto RLS", "Fecha de petición", "Fecha de vencimiento", "Estado",
         ])
-    df["Estado"] = df["Estado"].apply(lambda x: x if x in TASK_STATUS_OPTIONS else "No iniciado")
+    df["Estado"] = df["Estado"].apply(task_status)
     return clean_interface_dataframe(df)
 
 
@@ -2673,7 +2702,7 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
     if not action_tasks.empty:
         for _, row in action_tasks.iterrows():
             status = safe_text(row.get("Estado")) or "No iniciado"
-            if status in {"Completado", "Descartado"}:
+            if task_status(status) in {"Completada", "Descartada"}:
                 continue
             due_date = parse_iso_date(row.get("Fecha de vencimiento"))
             if not due_date or due_date >= today:
@@ -2709,7 +2738,7 @@ def build_overdue_task_candidates(data: pd.DataFrame, engine: Engine) -> list[di
     if not manual_tasks.empty:
         for _, row in manual_tasks.iterrows():
             status = safe_text(row.get("estado")) or "No iniciado"
-            if status in {"Completado", "Descartado"}:
+            if task_status(status) in {"Completada", "Descartada"}:
                 continue
             due_date = parse_iso_date(row.get("fecha_vencimiento"))
             if not due_date or due_date >= today:
@@ -2851,7 +2880,7 @@ def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.Dat
                 "titulo": safe_text(row.get("Id_acción + Título")),
                 "descripcion": safe_text(row.get("Próximos pasos")),
                 "responsable": safe_text(row.get("Responsable de seguimiento")),
-                "estado": safe_text(row.get("Estado")) or "No iniciado",
+                "estado": task_status(row.get("Estado")),
                 "ubicacion": "",
                 "fecha_vencimiento": due_date,
             })
@@ -2885,7 +2914,7 @@ def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.Dat
                 "titulo": title,
                 "descripcion": task_text,
                 "responsable": safe_text(row.get("responsable_seguimiento")),
-                "estado": safe_text(row.get("estado")) or "No iniciado",
+                "estado": task_status(row.get("estado")),
                 "ubicacion": "",
                 "fecha_vencimiento": due_date,
             })
@@ -3345,8 +3374,90 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                 st.success("Evento eliminado.")
                 st.rerun()
 
+def autosave_task_editor(editor_key: str, source_rows: list[dict], manual: bool) -> None:
+    """Guarda únicamente las filas cambiadas, sin reescribir toda la tabla."""
+    event = st.session_state.get(editor_key, {})
+    edits = event.get("edited_rows", {}) if isinstance(event, dict) else {}
+    if not edits:
+        return
+    engine = get_engine()
+    username = safe_text(st.session_state.get("user_name"))
+    now = datetime.now().isoformat(timespec="seconds")
+    writable = {"proximos_pasos", "descripcion", "responsable_seguimiento", "fecha_peticion", "fecha_vencimiento", "estado", "Contacto RLS"} if manual else {"Descripción", "Fecha de vencimiento", "Estado", "Contacto RLS"}
+    try:
+        with engine.begin() as conn:
+            for pos, changed in edits.items():
+                row = source_rows[int(pos)]
+                values = {key: value for key, value in changed.items() if key in writable}
+                if not values:
+                    continue
+                if manual:
+                    mapping = {"Contacto RLS": "contacto_id"}
+                    values = {mapping.get(k,k): (parse_contact_id_from_label(v) if k=="Contacto RLS" else task_status(v) if k=="estado" else safe_text(v)) for k,v in values.items()}
+                    values.update({"updated_by":username,"updated_at":now,"task_id":int(row["task_id"])})
+                    fields = [k for k in values if k != "task_id"]
+                    conn.execute(text("UPDATE manual_tasks SET "+", ".join(f"{k}=:{k}" for k in fields)+" WHERE task_id=:task_id"), values)
+                else:
+                    existing = conn.execute(text("SELECT descripcion, contacto_id, fecha_vencimiento, estado FROM task_overrides WHERE task_key=:k"),{"k":row["task_key"]}).mappings().first()
+                    base = dict(existing) if existing else {"descripcion":"", "contacto_id":None, "fecha_vencimiento":"", "estado":"No iniciada"}
+                    mapping = {"Descripción":"descripcion", "Fecha de vencimiento":"fecha_vencimiento", "Estado":"estado", "Contacto RLS":"contacto_id"}
+                    for key,value in values.items():
+                        base[mapping[key]] = parse_contact_id_from_label(value) if key == "Contacto RLS" else task_status(value) if key == "Estado" else safe_text(value)
+                    base.update({"task_key":row["task_key"],"updated_by":username,"updated_at":now})
+                    conn.execute(text("""INSERT INTO task_overrides (task_key,descripcion,contacto_id,fecha_vencimiento,estado,updated_by,updated_at)
+                      VALUES (:task_key,:descripcion,:contacto_id,:fecha_vencimiento,:estado,:updated_by,:updated_at)
+                      ON CONFLICT(task_key) DO UPDATE SET descripcion=excluded.descripcion,contacto_id=excluded.contacto_id,
+                      fecha_vencimiento=excluded.fecha_vencimiento,estado=excluded.estado,updated_by=excluded.updated_by,updated_at=excluded.updated_at"""),base)
+        get_manual_tasks.clear()
+        get_task_overrides.clear()
+        st.session_state.pop("task_autosave_error",None)
+    except Exception as exc:
+        st.session_state["task_autosave_error"] = str(exc)
+
+
+def autosave_selected_manual(task_id: int, keys: dict[str,str]) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    fields = {col:task_status(st.session_state[k]) if col == "estado" else safe_text(st.session_state[k]) for col,k in keys.items()}
+    fields.update({"task_id":int(task_id),"updated_at":now,"updated_by":safe_text(st.session_state.get("user_name"))})
+    with get_engine().begin() as conn:
+        conn.execute(text("UPDATE manual_tasks SET "+", ".join(f"{col}=:{col}" for col in fields if col!="task_id")+" WHERE task_id=:task_id"),fields)
+    get_manual_tasks.clear()
+
+
+def render_selected_task() -> None:
+    task_id=st.session_state.get("focus_manual_task")
+    if not task_id:
+        return
+    tasks=get_manual_tasks(get_engine())
+    match=tasks[tasks["task_id"]==int(task_id)]
+    if match.empty:
+        st.session_state.pop("focus_manual_task",None)
+        return
+    row=match.iloc[0]
+    st.markdown("### Editar tarea seleccionada")
+    st.caption("Cada campo se guarda automáticamente al confirmar el cambio.")
+    fields={"proximos_pasos":"Título / próximo paso","descripcion":"Descripción","fecha_peticion":"Fecha de petición (AAAA-MM-DD)","fecha_vencimiento":"Fecha de ejecución (AAAA-MM-DD)"}
+    keys={col:f"selected_task_{task_id}_{col}" for col in fields}
+    keys["estado"]=f"selected_task_{task_id}_estado"
+    for col,label in fields.items():
+        if keys[col] not in st.session_state:
+            st.session_state[keys[col]]=safe_text(row.get(col))
+        st.text_input(label,key=keys[col],on_change=autosave_selected_manual,args=(int(task_id),keys))
+    current=task_status(row.get("estado"))
+    if keys["estado"] not in st.session_state:
+        st.session_state[keys["estado"]]=current
+    st.selectbox("Estado",TASK_STATUS_OPTIONS,key=keys["estado"],on_change=autosave_selected_manual,args=(int(task_id),keys))
+    st.markdown(status_chip(st.session_state[keys["estado"]]),unsafe_allow_html=True)
+    if st.button("Cerrar edición",key="close_selected_task"):
+        st.session_state.pop("focus_manual_task",None)
+        st.rerun()
+
+
 def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.subheader("Tareas")
+    render_selected_task()
+    if st.session_state.get("task_autosave_error"):
+        st.error("No se han podido guardar los cambios. Comprueba la conexión antes de salir.")
     st.caption("Seguimiento operativo de próximos pasos derivados de las fichas de actividad y tareas añadidas manualmente.")
 
     contacts = get_contacts(engine)
@@ -3377,8 +3488,10 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                 "Estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
             },
             key="action_tasks_editor",
+            on_change=autosave_task_editor,
+            args=("action_tasks_editor", action_tasks.to_dict("records"), False),
         )
-        if st.button("Guardar cambios en tareas de fichas", key="save_action_tasks"):
+        if False and st.button("Guardar cambios en tareas de fichas", key="save_action_tasks"):
             if not user_name:
                 st.error("Antes de guardar, escribe tu nombre o entra con un perfil identificado.")
             else:
@@ -3432,8 +3545,9 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         st.info("Todavía no hay tareas manuales.")
     else:
         visible_manual = manual_tasks.copy()
+        visible_manual["estado"] = visible_manual["estado"].apply(task_status)
         visible_manual["Id_acción + Título"] = visible_manual.apply(
-            lambda row: f"{int(row['id_accion']):03d} - {safe_text(row.get('accion_titulo'))}" if pd.notna(row.get("id_accion")) and safe_text(row.get("id_accion")) not in ["", "0"] else "Sin acción asociada",
+            lambda row: safe_text(row.get("accion_titulo")) if pd.notna(row.get("id_accion")) and safe_text(row.get("id_accion")) not in ["", "0"] else "Sin acción asociada",
             axis=1,
         )
         editor_cols = [
@@ -3460,10 +3574,12 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                 "estado": st.column_config.SelectboxColumn("Estado", options=TASK_STATUS_OPTIONS, required=True, width="small"),
             },
             key="manual_tasks_editor",
+            on_change=autosave_task_editor,
+            args=("manual_tasks_editor", visible_manual[editor_cols].to_dict("records"), True),
         )
         c1, c2 = st.columns([1, 1])
         with c1:
-            if st.button("Guardar cambios en tareas manuales", key="save_manual_tasks"):
+            if False and st.button("Guardar cambios en tareas manuales", key="save_manual_tasks"):
                 if not user_name:
                     st.error("Antes de guardar, escribe tu nombre o entra con un perfil identificado.")
                 else:
@@ -3479,7 +3595,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
                     st.rerun()
         with c2:
             task_ids = visible_manual["task_id"].astype(int).tolist()
-            delete_id = st.selectbox("Eliminar tarea manual", task_ids, format_func=lambda x: f"Tarea {x}", key="delete_manual_task_select")
+            delete_id = st.selectbox("Eliminar tarea manual", task_ids, format_func=lambda x: safe_text(visible_manual.loc[visible_manual["task_id"] == x, "proximos_pasos"].iloc[0]) or "Tarea sin título", key="delete_manual_task_select")
             if st.button("Eliminar tarea seleccionada", key="delete_manual_task"):
                 delete_manual_task(engine, int(delete_id))
                 st.success("Tarea eliminada.")
@@ -3682,6 +3798,30 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         "nuevos_retos.xlsx",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+def render_home_tasks(engine: Engine) -> None:
+    tasks=get_manual_tasks(engine)
+    if tasks.empty:
+        return
+    tasks=tasks.copy()
+    tasks["Título"]=tasks["proximos_pasos"].apply(safe_text)
+    tasks["Descripción"]=tasks["descripcion"].apply(safe_text)
+    tasks["Fecha"]=tasks["fecha_vencimiento"].apply(safe_text)
+    tasks["Estado"]=tasks["estado"].apply(task_status)
+    active=tasks[~tasks["Estado"].isin(["Completada","Descartada"])].copy()
+    if active.empty:
+        return
+    st.subheader("Mis tareas pendientes")
+    st.caption("Selecciona una tarea para abrirla y editarla. Los cambios se guardan automáticamente.")
+    selection=st.dataframe(active[["Título","Fecha","Descripción","Estado"]],hide_index=True,use_container_width=True,
+       on_select="rerun",selection_mode="single-row",key="home_tasks_list")
+    chosen=selection.selection.rows
+    if chosen:
+        st.session_state["focus_manual_task"]=int(active.iloc[chosen[0]]["task_id"])
+        st.session_state["main_navigation"]="Tareas"
+        st.rerun()
+    st.markdown(" ".join(status_chip(s) for s in TASK_STATUS_OPTIONS),unsafe_allow_html=True)
+
 
 def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> None:
     """Panel general completo o gráfico circular exclusivo para perfiles de ámbito."""
@@ -4760,6 +4900,7 @@ def main() -> None:
     page_icon = str(LOGO_PATH) if LOGO_PATH.exists() else None
     st.set_page_config(page_title="Evaluación y seguimiento", page_icon=page_icon, layout="wide")
     apply_brand_theme()
+    apply_intranet_polish()
     st.markdown(
         """
         <style>
@@ -4856,7 +4997,7 @@ def main() -> None:
     if current_role == "admin":
         available_pages = [
             "Panel general", "Matriz", "Ficha de actividad", "Nuevos Retos",
-            "Calendario", "Red Local de Salud", "Evolución", "Administración",
+            "Tareas", "Calendario", "Red Local de Salud", "Evolución", "Administración",
         ]
     elif current_profile == "Dirección":
         available_pages = [
@@ -4873,6 +5014,7 @@ def main() -> None:
     selected_page = render_navigation(available_pages)
 
     if selected_page == "Panel general":
+        render_home_tasks(engine) if current_role == "admin" or current_profile == "Dirección" else None
         render_dashboard(filtered, solo_grafico_ambito=current_profile in eje_profiles)
 
     elif selected_page == "Matriz":
