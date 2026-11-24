@@ -7,6 +7,7 @@ import io
 import os
 import re
 import smtplib
+import unicodedata
 from datetime import date, datetime
 from email.message import EmailMessage
 from pathlib import Path
@@ -627,7 +628,7 @@ def apply_brand_theme() -> None:
 
         /* Tipografía general: 11 pt = 14,67 px. La fuente se toma del sistema
            si está instalada; las negritas y cursivas originales se conservan. */
-        html, body, .stApp, .stApp p, .stApp span, .stApp label,
+        html, body, .stApp, .stApp p, .stApp label,
         .stApp li, .stApp a, .stApp button, .stApp input,
         .stApp textarea, .stApp select, .stApp th, .stApp td,
         .stApp [data-baseweb="select"],
@@ -651,6 +652,40 @@ def apply_brand_theme() -> None:
         .stApp .day-item, .stApp .more-items {{
             font-size: 11pt !important;
         }}
+        /* IMPORTANTE: los iconos de Streamlit son ligaduras en fuente Material.
+           Franklin Gothic en los span las convertía en texto visible: expand_more,
+           _arrow_down, help, etc. Restablecer la familia específica de iconos. */
+        .stApp [data-testid="stIconMaterial"],
+        .stApp [data-testid="stIconMaterial"] span,
+        .stApp .material-symbols-rounded,
+        .stApp .material-symbols-outlined,
+        .stApp .material-icons,
+        .stApp span[class*="material-symbols"],
+        .stApp span[class*="material-icons"] {{
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            font-size: 24px !important;
+            line-height: 1 !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
+            font-feature-settings: "liga" !important;
+            -webkit-font-feature-settings: "liga" !important;
+            -webkit-font-smoothing: antialiased !important;
+            flex-shrink: 0 !important;
+        }}
+        /* Los iconos de los encabezados y el menú no se comprimen. */
+        .stApp [data-testid="stExpander"] summary [data-testid="stIconMaterial"],
+        .stApp [data-testid="stPopover"] [data-testid="stIconMaterial"] {{
+            display: inline-flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            width: 1.5rem !important;
+            min-width: 1.5rem !important;
+        }}
         .stApp h1 {{ font-size: 1.75rem !important; }}
         .stApp h2 {{ font-size: 1.45rem !important; }}
         .stApp h3 {{ font-size: 1.22rem !important; }}
@@ -663,6 +698,131 @@ def apply_brand_theme() -> None:
         .stApp [data-testid="column"],
         .stApp [data-testid="stHorizontalBlock"] {{
             min-width: 0 !important;
+        }}
+
+        /* Red Local de Salud: selector legible, sin textos superpuestos. */
+        .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] {{
+            width: 100% !important;
+            gap: 1rem !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="column"] {{
+            min-width: 0 !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] > div {{
+            min-height: 2.75rem !important;
+            height: auto !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] [data-baseweb="tag"] {{
+            max-width: 100% !important;
+        }}
+        .st-key-rls_filters_panel [data-baseweb="select"] [data-baseweb="tag"] span {{
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="stWidgetLabel"] {{
+            margin-bottom: .25rem !important;
+            height: auto !important;
+        }}
+        .st-key-rls_filters_panel [data-testid="stWidgetLabel"] p {{
+            line-height: 1.35 !important;
+            white-space: normal !important;
+        }}
+        .st-key-rls_filters_panel input {{
+            min-width: 0 !important;
+            line-height: 1.5 !important;
+        }}
+        /* Alta de contactos: encabezado corporativo y formulario cerrado al entrar. */
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] {{
+            border: 2px solid var(--brand-sky) !important;
+            border-left: 7px solid var(--brand-gold) !important;
+            border-radius: .85rem !important;
+        }}
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] summary {{
+            background: #EAF6FA !important;
+            border-radius: .7rem !important;
+            padding: .8rem 1rem !important;
+        }}
+        .st-key-rls_add_contact_panel [data-testid="stExpander"] summary p {{
+            color: var(--brand-navy) !important;
+            font-weight: 750 !important;
+            font-size: 11pt !important;
+            line-height: 1.5 !important;
+        }}
+        /* Controles accesibles: 11 pt requiere altura natural y salto de línea. */
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stFormSubmitButton"] button,
+        .stApp [data-testid="stPopover"] > button,
+        .stApp [data-testid="stDownloadButton"] button,
+        .stApp [data-testid="stBaseButton-secondary"],
+        .stApp [data-testid="stBaseButton-primary"] {{
+            min-height: 3rem !important;
+            height: auto !important;
+            max-width: 100% !important;
+            padding: .55rem .75rem !important;
+            line-height: 1.35 !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            box-sizing: border-box !important;
+        }}
+        .stApp [data-testid="stButton"] button p,
+        .stApp [data-testid="stFormSubmitButton"] button p,
+        .stApp [data-testid="stPopover"] > button p,
+        .stApp [data-testid="stDownloadButton"] button p,
+        .stApp button[data-testid^="stBaseButton"] p {{
+            margin: 0 !important;
+            line-height: 1.35 !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            text-align: center !important;
+        }}
+        .stApp [data-testid="stPopover"] > button {{
+            width: 100% !important;
+            gap: .3rem !important;
+        }}
+        /* Encabezados desplegables, especialmente importar y alta de contactos. */
+        .stApp [data-testid="stExpander"] summary {{
+            min-height: 3.1rem !important;
+            height: auto !important;
+            padding: .7rem .9rem !important;
+            align-items: center !important;
+            box-sizing: border-box !important;
+        }}
+        .stApp [data-testid="stExpander"] summary p {{
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            line-height: 1.4 !important;
+            margin: 0 !important;
+        }}
+        /* Los selectores y sus etiquetas tampoco deben superponerse. */
+        .stApp [data-testid="stWidgetLabel"] {{
+            height: auto !important;
+            min-height: 0 !important;
+            margin-bottom: .2rem !important;
+        }}
+        .stApp [data-testid="stWidgetLabel"] p {{
+            line-height: 1.4 !important;
+            white-space: normal !important;
+        }}
+        .stApp [data-baseweb="select"] > div,
+        .stApp [data-baseweb="input"] > div {{
+            min-height: 2.85rem !important;
+            height: auto !important;
+        }}
+        /* La cabecera debe conservar suficiente espacio para Ayuda y Cerrar sesión. */
+        .session-strip {{ min-width: 0 !important; }}
+        @media (max-width: 750px) {{
+            .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] {{
+                flex-direction: column !important;
+                align-items: stretch !important;
+                gap: .6rem !important;
+            }}
+            .st-key-rls_filters_panel [data-testid="stHorizontalBlock"] > [data-testid="column"] {{
+                width: 100% !important;
+                flex: 0 0 100% !important;
+            }}
         }}
 </style>
         """,
@@ -2052,7 +2212,7 @@ def render_session_bar() -> str:
         unsafe_allow_html=True,
     )
 
-    info_col, help_col, logout_col = st.columns([7, 1.45, 1.55], vertical_alignment="center")
+    info_col, help_col, logout_col = st.columns([5, 2.5, 2.5], vertical_alignment="center")
     with info_col:
         st.markdown(
             f"""
@@ -3523,72 +3683,61 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-def render_dashboard(df: pd.DataFrame) -> None:
+def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> None:
+    """Panel general completo o gráfico circular exclusivo para perfiles de ámbito."""
     chart_df = df.copy()
-
-    # Limpieza específica para gráficos: evita categorías técnicas como
-    # undefined/null/nan y no las convierte en leyenda visible.
     chart_df["Ámbito"] = chart_df["Ámbito"].apply(safe_text)
     chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].apply(safe_text)
     chart_df["estado_evaluacion"] = chart_df["estado_evaluacion"].where(
-        chart_df["estado_evaluacion"].isin(STATUS_OPTIONS),
-        "Sin evaluar",
+        chart_df["estado_evaluacion"].isin(STATUS_OPTIONS), "Sin evaluar"
     )
     chart_df["estado_actual"] = chart_df["estado_actual"].apply(safe_text)
     chart_df["estado_actual"] = chart_df["estado_actual"].where(
-        chart_df["estado_actual"].isin(ACTION_STATUS_OPTIONS),
-        "No iniciada",
+        chart_df["estado_actual"].isin(ACTION_STATUS_OPTIONS), "No iniciada"
     )
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Acciones filtradas", len(chart_df))
-    col2.metric("Iniciadas", int((chart_df["estado_actual"] == "Iniciada").sum()))
-    col3.metric("Completadas", int((chart_df["estado_actual"] == "Completada").sum()))
-    col4.metric("No iniciadas", int((chart_df["estado_actual"] == "No iniciada").sum()))
+    # Perfiles de Alimentación, Deporte, Educación, Ocio y Bienestar emocional:
+    # únicamente gráfico de queso con las acciones de su ámbito.
+    if not solo_grafico_ambito:
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Acciones filtradas", len(chart_df))
+        col2.metric("Iniciadas", int((chart_df["estado_actual"] == "Iniciada").sum()))
+        col3.metric("Completadas", int((chart_df["estado_actual"] == "Completada").sum()))
+        col4.metric("No iniciadas", int((chart_df["estado_actual"] == "No iniciada").sum()))
+        col5.metric("No procede", int((chart_df["estado_actual"] == "No procede").sum()))
 
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Acciones por ámbito y estado actual")
-        chart_data = (
-            chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
-            .groupby(["Ámbito", "estado_actual"], dropna=False)
-            .size()
-            .reset_index(name="acciones")
-        )
-        if not chart_data.empty:
-            fig = px.bar(
-                chart_data,
-                x="Ámbito",
-                y="acciones",
-                color="estado_actual",
-                text="acciones",
-                barmode="stack",
-                category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
-                color_discrete_sequence=BRAND_COLORS,
-                labels={
-                    "Ámbito": "Ámbito",
-                    "acciones": "Acciones",
-                    "estado_actual": "Estado actual",
-                },
+        left, right = st.columns(2)
+        with left:
+            st.subheader("Acciones por ámbito y estado actual")
+            chart_data = (
+                chart_df[chart_df["Ámbito"].astype(str).str.strip() != ""]
+                .groupby(["Ámbito", "estado_actual"], dropna=False)
+                .size().reset_index(name="acciones")
             )
-            fig.update_traces(textposition="inside")
-            st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
-        else:
-            st.info("No hay datos suficientes para mostrar este gráfico.")
-    with right:
+            if not chart_data.empty:
+                fig = px.bar(
+                    chart_data, x="Ámbito", y="acciones", color="estado_actual",
+                    text="acciones", barmode="stack",
+                    category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
+                    color_discrete_sequence=BRAND_COLORS,
+                    labels={"Ámbito": "Ámbito", "acciones": "Acciones", "estado_actual": "Estado actual"},
+                )
+                fig.update_traces(textposition="inside")
+                st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+            else:
+                st.info("No hay datos suficientes para mostrar este gráfico.")
+
+    def mostrar_grafico_circular() -> None:
         st.subheader("Estado actual de las acciones")
         chart_data = (
             chart_df[chart_df["estado_actual"].astype(str).str.strip() != ""]
             .groupby("estado_actual", dropna=False)
-            .size()
-            .reset_index(name="acciones")
+            .size().reset_index(name="acciones")
         )
         chart_data = chart_data[chart_data["estado_actual"].isin(ACTION_STATUS_OPTIONS)]
         if not chart_data.empty:
             fig = px.pie(
-                chart_data,
-                names="estado_actual",
-                values="acciones",
+                chart_data, names="estado_actual", values="acciones",
                 category_orders={"estado_actual": ACTION_STATUS_OPTIONS},
                 color_discrete_sequence=BRAND_COLORS,
                 labels={"estado_actual": "Estado actual", "acciones": "Acciones"},
@@ -3597,10 +3746,87 @@ def render_dashboard(df: pd.DataFrame) -> None:
         else:
             st.info("No hay datos suficientes para mostrar este gráfico.")
 
-    st.subheader("Acciones pendientes de completar")
-    columns = ["id_accion", "Ámbito", "Título", "Estado", "estado_actual", "cumplimiento_indicadores", "responsable_seguimiento", "updated_by"]
-    pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada"])]
-    st.dataframe(clean_interface_dataframe(pending.sort_values(["estado_actual", "id_accion"])[columns].head(20)), use_container_width=True, hide_index=True)
+    if solo_grafico_ambito:
+        mostrar_grafico_circular()
+    else:
+        with right:
+            mostrar_grafico_circular()
+
+    st.subheader("Acciones pendientes y No procede")
+    pending = chart_df[chart_df["estado_actual"].isin(["No iniciada", "Iniciada", "No procede"])].copy()
+    # La edición de la ficha y la evaluación pueden guardar el siguiente paso en
+    # campos distintos. Se prioriza el de evaluación, como hace la ficha.
+    def column_or_blank(name: str) -> pd.Series:
+        if name in pending.columns:
+            return pending[name].apply(safe_text)
+        return pd.Series("", index=pending.index, dtype="object")
+
+    next_steps = column_or_blank("proximos_pasos")
+    fallback_steps = column_or_blank("Medida")
+    pending["Próximo paso"] = next_steps.where(next_steps.ne(""), fallback_steps)
+    display_cols = [
+        "id_accion", "Ámbito", "Título", "estado_actual", "Preasignación",
+        "Agente promotor", "Próximo paso",
+    ]
+    for col in display_cols:
+        if col not in pending.columns:
+            pending[col] = ""
+    pending = pending.sort_values(["estado_actual", "id_accion"])[display_cols]
+    pending = pending.rename(columns={
+        "id_accion": "Id_accion", "Título": "Título",
+        "estado_actual": "Estado actual", "Preasignación": "Asignado a",
+        "Agente promotor": "Agente Promotor",
+    })
+    if pending.empty:
+        st.info("No hay acciones pendientes ni clasificadas como No procede.")
+    else:
+        st.dataframe(
+            clean_interface_dataframe(pending),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Id_accion": st.column_config.NumberColumn("Id_accion", width="small"),
+                "Ámbito": st.column_config.TextColumn("Ámbito", width="medium"),
+                "Título": st.column_config.TextColumn("Título", width="large"),
+                "Estado actual": st.column_config.TextColumn("Estado actual", width="small"),
+                "Asignado a": st.column_config.TextColumn("Asignado a", width="medium"),
+                "Agente Promotor": st.column_config.TextColumn("Agente Promotor", width="medium"),
+                "Próximo paso": st.column_config.TextColumn("Próximo paso", width="large"),
+            },
+        )
+
+def render_dashboard_export(data: pd.DataFrame, engine: Engine) -> None:
+    """Exporta todas las acciones autorizadas y sus campos actuales."""
+    contacts, assignments = load_contacts_and_assignments(engine)
+    export = clean_interface_dataframe(merge_assignments(data, assignments, contacts))
+    next_steps = export["proximos_pasos"].apply(safe_text)
+    export["Próximo paso"] = next_steps.where(next_steps.ne(""), export["Medida"].apply(safe_text))
+    export = export.rename(columns={
+        "id_accion": "Id_accion", "Preasignación": "Asignado a",
+        "estado_actual": "Estado actual", "Estado": "Estado original",
+        "estado_evaluacion": "Estado de evaluación",
+        "personas_red_asignadas": "Personas de la red asignadas",
+        "num_personas_red": "Número de personas asignadas",
+    }).sort_values("Id_accion")
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        export.to_excel(writer, index=False, sheet_name="Todas las acciones")
+        sheet = writer.sheets["Todas las acciones"]
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            for cell in column:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+            sheet.column_dimensions[column[0].column_letter].width = min(55, max(14, len(str(column[0].value)) + 3))
+    st.download_button(
+        "Descargar información completa de las acciones (Excel)",
+        buffer.getvalue(), "acciones_completas.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dashboard_full_actions_export",
+    )
+    st.caption(f"Incluye {len(export)} acciones y todos sus campos, dentro del ámbito autorizado de tu perfil.")
+
 
 def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFrame, assignments: pd.DataFrame, user_name: str, engine: Engine) -> None:
     visible_columns = [
@@ -3685,51 +3911,52 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     col3.metric("Comisiones", contacts["Comisión"].replace("", pd.NA).dropna().nunique() if not contacts.empty else 0)
     col4.metric("Contactos asignados", assignments["contacto_id"].nunique() if not assignments.empty else 0)
 
-    st.markdown("### Añadir nueva persona a la Red Local de Salud")
-    st.info("Utiliza este formulario para registrar un nuevo contacto en la agenda.")
-    with st.expander("+ AÑADIR NUEVA PERSONA", expanded=True):
-        with st.form("add_contact_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            persona = c1.text_input("Persona")
-            entidad = c2.text_input("Entidad")
-            c3, c4 = st.columns(2)
-            categoria = c3.text_input("Categoría")
-            subcategoria = c4.text_input("Subcategoría")
-            c5, c6 = st.columns(2)
-            comision = c5.text_input("Comisión")
-            perfil = c6.text_input("Perfil")
-            c7, c8 = st.columns(2)
-            telefono = c7.text_input("Teléfono")
-            mail = c8.text_input("Mail")
-            submitted = st.form_submit_button("Añadir persona")
-        if submitted:
-            if not user_name:
-                st.error("Antes de añadir una persona, escribe tu nombre en la barra lateral.")
-            elif not safe_text(persona) and not safe_text(entidad):
-                st.error("Introduce al menos la persona o la entidad.")
-            else:
-                add_contact(engine, {
-                    "Categoria": categoria,
-                    "Subcategoria": subcategoria,
-                    "Comisión": comision,
-                    "Perfil": perfil,
-                    "Entidad": entidad,
-                    "Teléfono": telefono,
-                    "Persona": persona,
-                    "Mail": mail,
-                }, user_name)
-                st.success("Persona añadida a la Red Local de Salud.")
-                st.rerun()
+    with st.container(key="rls_add_contact_panel"):
+        with st.expander("+ AÑADIR NUEVA PERSONA", expanded=False):
+            with st.form("add_contact_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                persona = c1.text_input("Persona")
+                entidad = c2.text_input("Entidad")
+                c3, c4 = st.columns(2)
+                categoria = c3.text_input("Categoría")
+                subcategoria = c4.text_input("Subcategoría")
+                c5, c6 = st.columns(2)
+                comision = c5.text_input("Comisión")
+                perfil = c6.text_input("Perfil")
+                c7, c8 = st.columns(2)
+                telefono = c7.text_input("Teléfono")
+                mail = c8.text_input("Mail")
+                submitted = st.form_submit_button("Añadir persona")
+            if submitted:
+                if not user_name:
+                    st.error("Antes de añadir una persona, escribe tu nombre en la barra lateral.")
+                elif not safe_text(persona) and not safe_text(entidad):
+                    st.error("Introduce al menos la persona o la entidad.")
+                else:
+                    add_contact(engine, {
+                        "Categoria": categoria,
+                        "Subcategoria": subcategoria,
+                        "Comisión": comision,
+                        "Perfil": perfil,
+                        "Entidad": entidad,
+                        "Teléfono": telefono,
+                        "Persona": persona,
+                        "Mail": mail,
+                    }, user_name)
+                    st.success("Persona añadida a la Red Local de Salud.")
+                    st.rerun()
 
     if contacts.empty:
         return
 
-    with st.expander("Filtros", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
-        categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]), placeholder="Elige o escribe")
-        texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
+    with st.container(key="rls_filters_panel"):
+        with st.expander("Filtros", expanded=True):
+            c1, c2 = st.columns(2, gap="medium")
+            categoria = c1.multiselect("Categoría", sorted([v for v in contacts["Categoria"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            comision = c2.multiselect("Comisión", sorted([v for v in contacts["Comisión"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            c3, c4 = st.columns(2, gap="medium")
+            perfil = c3.multiselect("Perfil", sorted([v for v in contacts["Perfil"].unique() if safe_text(v)]), placeholder="Elige o escribe")
+            texto = c4.text_input("Buscar", placeholder="Persona, entidad, email...")
 
     filtered = contacts.copy()
     if categoria:
@@ -4105,13 +4332,23 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
     row = selected_rows.iloc[0]
     contacts = get_contacts(engine)
     promoter_ids = contacts["contacto_id"].astype(int).tolist() if not contacts.empty else []
-    # Streamlit filtra el texto completo de format_func: nombre, entidad, perfil, comisión, correo, etc.
+    # Los resultados solo muestran persona y entidad; no la ficha completa del contacto.
+    # La búsqueda utiliza exclusivamente Categoria, Entidad y Persona.
     promoter_labels = {}
     promoter_names = {}
+    promoter_search_text = {}
+    def normalize_promoter_search(value: Any) -> str:
+        value = unicodedata.normalize("NFKD", safe_text(value).casefold())
+        return "".join(char for char in value if not unicodedata.combining(char))
+
     for _, contact in contacts.iterrows():
         cid = int(contact["contacto_id"])
-        promoter_labels[cid] = " · ".join(safe_text(contact.get(c)) for c in CONTACT_COLUMNS if safe_text(contact.get(c))) or f"Contacto {cid}"
-        promoter_names[cid] = safe_text(contact.get("Persona")) or safe_text(contact.get("Entidad"))
+        persona = safe_text(contact.get("Persona"))
+        entidad = safe_text(contact.get("Entidad"))
+        categoria = safe_text(contact.get("Categoria"))
+        promoter_labels[cid] = " — ".join(part for part in (persona, entidad) if part) or (categoria or f"Contacto {cid}")
+        promoter_names[cid] = persona or entidad
+        promoter_search_text[cid] = normalize_promoter_search(" ".join((categoria, entidad, persona)))
     current_promoter = safe_text(row.get("Agente promotor"))
     selected_promoter_id = next((cid for cid in promoter_ids if promoter_names[cid] == current_promoter), None)
     st.session_state[f"promoter_names_{selected_id}"] = promoter_names
@@ -4152,7 +4389,28 @@ def render_action_detail(df: pd.DataFrame, all_data: pd.DataFrame, user_name: st
             st.text_input("Temporalidad", key=init("temporalidad", initial["temporalidad"]), on_change=callback)
         with short_right:
             st.selectbox("Tipo", type_options, key=init("tipo", initial["tipo"]), on_change=callback)
-            st.selectbox("Agente promotor", [None] + promoter_ids, key=init("promotor", selected_promoter_id), on_change=callback, format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"), help="Persona o entidad que ejecutará la acción. Busca por cualquiera de los campos de la agenda.")
+            st.text_input(
+                "Buscar agente promotor",
+                key=f"promoter_filter_{selected_id}",
+                placeholder="Categoría, entidad o persona...",
+                help="Busca por cualquiera de estos tres campos de la Red Local de Salud.",
+            )
+            search_term = normalize_promoter_search(st.session_state.get(f"promoter_filter_{selected_id}", ""))
+            matching_promoters = [cid for cid in promoter_ids if not search_term or search_term in promoter_search_text[cid]]
+            selected_widget_promoter = st.session_state.get(key("promotor"), selected_promoter_id)
+            # Mantener el contacto seleccionado aunque no aparezca en el filtro actual.
+            if selected_widget_promoter is not None and selected_widget_promoter in promoter_ids and selected_widget_promoter not in matching_promoters:
+                matching_promoters.insert(0, selected_widget_promoter)
+            st.selectbox(
+                "Agente promotor",
+                [None] + matching_promoters,
+                key=init("promotor", selected_promoter_id),
+                on_change=callback,
+                format_func=lambda cid: "Sin asignar" if cid is None else promoter_labels.get(cid, "Contacto"),
+                help="Selecciona quién ejecutará la acción. Los resultados muestran solo persona y entidad.",
+            )
+            if search_term and not any(search_term in promoter_search_text[cid] for cid in promoter_ids):
+                st.caption("No hay contactos que coincidan con la búsqueda.")
             st.text_input("Personas destinatarias", key=init("destinatarias", initial["personas_destinatarias"]), on_change=callback)
         st.text_area("Próximo paso", key=init("proximo", current_steps), on_change=callback, height=90)
         st.text_area("Descripción", key=init("descripcion", initial["descripcion"]), on_change=callback, height=105)
@@ -4649,7 +4907,8 @@ def main() -> None:
     selected_page = render_navigation(available_pages)
 
     if selected_page == "Panel general":
-        render_dashboard(filtered)
+        render_dashboard(filtered, solo_grafico_ambito=current_profile in eje_profiles)
+        render_dashboard_export(data, engine)
 
     elif selected_page == "Matriz":
         with st.spinner("Cargando asignaciones y contactos..."):
