@@ -1801,14 +1801,14 @@ def render_questionnaire_results(engine: Engine, id_accion: int | None = None) -
     label_map = {"promotora": "Persona Promotora", "participante": "Persona participante"}
     responses["Tipo de cuestionario"] = responses["questionnaire_type"].map(label_map).fillna(responses["questionnaire_type"])
     summary = responses.groupby("Tipo de cuestionario", dropna=False).size().reset_index(name="Respuestas")
-    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.dataframe(summary, width="stretch", hide_index=True)
     visible = [
         "submitted_at", "Tipo de cuestionario", "action_title", "respondent_entity", "respondent_name",
         "rating_general", "rating_usefulness", "rating_clarity", "objectives_met", "would_repeat",
         "would_recommend", "comments",
     ]
     visible = [col for col in visible if col in responses.columns]
-    st.dataframe(responses[visible], use_container_width=True, hide_index=True)
+    st.dataframe(responses[visible], width="stretch", hide_index=True)
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         responses.to_excel(writer, index=False, sheet_name="Cuestionarios")
@@ -2084,7 +2084,7 @@ def render_home_image() -> None:
     if HOME_IMAGE_PATH.exists():
         left, center, right = st.columns([1, 3, 1])
         with center:
-            st.image(str(HOME_IMAGE_PATH), use_container_width=True)
+            st.image(str(HOME_IMAGE_PATH), width="stretch")
 
 
 def render_login_title() -> None:
@@ -2225,7 +2225,7 @@ def render_session_bar() -> str:
         )
 
     with help_col:
-        with st.popover("❓ Ayuda", use_container_width=True):
+        with st.popover("❓ Ayuda", width="stretch"):
             st.markdown("**Atención y soporte**")
             st.markdown("✉️ [osasunsarea@erandio.eus](mailto:osasunsarea@erandio.eus)")
             st.markdown("📱 [669 805 544](tel:+34669805544)")
@@ -2238,7 +2238,7 @@ def render_session_bar() -> str:
             )
 
     with logout_col:
-        if st.button("Cerrar sesión", key="top_logout", use_container_width=True):
+        if st.button("Cerrar sesión", key="top_logout", width="stretch"):
             st.session_state.clear()
             st.rerun()
 
@@ -2857,7 +2857,6 @@ def combine_task_rows_for_calendar(data: pd.DataFrame, engine: Engine) -> pd.Dat
             })
     try:
         manual_tasks = get_manual_tasks(engine)
-        manual_tasks = apply_contact_labels_to_tasks(manual_tasks, contacts_for_mail)
     except Exception:
         manual_tasks = pd.DataFrame()
     if not manual_tasks.empty:
@@ -3042,7 +3041,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     st.markdown("### Vista de calendario")
     bar_left, bar_center, bar_right = st.columns([1, 5, 1])
     with bar_left:
-        if st.button("◀ Anteriores", use_container_width=True):
+        if st.button("◀ Anteriores", width="stretch"):
             current_index = month_values.index(st.session_state["calendar_start_month"])
             st.session_state["calendar_start_month"] = month_values[max(0, current_index - 3)]
             st.rerun()
@@ -3056,7 +3055,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         )
         st.session_state["calendar_start_month"] = selected_month
     with bar_right:
-        if st.button("Posteriores ▶", use_container_width=True):
+        if st.button("Posteriores ▶", width="stretch"):
             current_index = month_values.index(st.session_state["calendar_start_month"])
             st.session_state["calendar_start_month"] = month_values[min(len(month_values) - 1, current_index + 3)]
             st.rerun()
@@ -3289,7 +3288,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         with st.expander("Ver agenda en tabla", expanded=False):
             st.dataframe(
                 clean_interface_dataframe(agenda_display[["Fecha", "Hora", "Tipo", "Origen", "Título / actividad", "Descripción / próximos pasos", "Responsable", "Estado", "Lugar / enlace", "Fecha de vencimiento"]]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             buffer = io.BytesIO()
@@ -3309,7 +3308,7 @@ def render_calendar(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         edit_cols = ["event_id", "title", "event_type", "description", "location", "start_date", "start_time", "end_date", "end_time", "responsable"]
         edited_events = st.data_editor(
             events[edit_cols],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             disabled=["event_id"],
             column_config={
@@ -3361,7 +3360,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
     else:
         edited_action_tasks = st.data_editor(
             action_tasks,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             disabled=["task_key", "contacto_id", "Id_acción + Título", "Próximos pasos", "Responsable de seguimiento", "Fecha de petición"],
             column_config={
@@ -3442,7 +3441,7 @@ def render_tasks(data: pd.DataFrame, user_name: str, engine: Engine) -> None:
         ]
         edited_manual = st.data_editor(
             visible_manual[editor_cols],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             disabled=["task_id", "id_accion", "accion_titulo", "contacto_id", "Id_acción + Título"],
             column_config={
@@ -3620,7 +3619,7 @@ def render_new_challenges(data: pd.DataFrame, user_name: str, engine: Engine) ->
     ]
     edited = st.data_editor(
         visible[editor_cols],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         disabled=["challenge_id", "id_accion", "accion_titulo", "updated_by", "updated_at"],
         column_config={
@@ -3723,7 +3722,7 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
                     labels={"Ámbito": "Ámbito", "acciones": "Acciones", "estado_actual": "Estado actual"},
                 )
                 fig.update_traces(textposition="inside")
-                st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+                st.plotly_chart(apply_plotly_brand_layout(fig), width="stretch")
             else:
                 st.info("No hay datos suficientes para mostrar este gráfico.")
 
@@ -3742,7 +3741,7 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
                 color_discrete_sequence=BRAND_COLORS,
                 labels={"estado_actual": "Estado actual", "acciones": "Acciones"},
             )
-            st.plotly_chart(apply_plotly_brand_layout(fig), use_container_width=True)
+            st.plotly_chart(apply_plotly_brand_layout(fig), width="stretch")
         else:
             st.info("No hay datos suficientes para mostrar este gráfico.")
 
@@ -3782,7 +3781,7 @@ def render_dashboard(df: pd.DataFrame, solo_grafico_ambito: bool = False) -> Non
     else:
         st.dataframe(
             clean_interface_dataframe(pending),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Id_accion": st.column_config.NumberColumn("Id_accion", width="small"),
@@ -3834,7 +3833,7 @@ def render_matrix(df: pd.DataFrame, all_data: pd.DataFrame, contacts: pd.DataFra
         "personas_red_asignadas", "num_personas_red",
         "estado_evaluacion", "cumplimiento_indicadores", "responsable_seguimiento", "fecha_actualizacion", "updated_by", "updated_at",
     ]
-    st.dataframe(df[visible_columns].rename(columns={"Preasignación": "Asignado a", "Medida": "Próximo paso"}), use_container_width=True, hide_index=True)
+    st.dataframe(df[visible_columns].rename(columns={"Preasignación": "Asignado a", "Medida": "Próximo paso"}), width="stretch", hide_index=True)
 
     st.markdown("### Asignar personas de la Red Local de Salud")
     if contacts.empty:
@@ -4005,7 +4004,7 @@ def render_contacts(contacts: pd.DataFrame, assignments: pd.DataFrame, data: pd.
     editable_cols = ["contacto_id", *CONTACT_COLUMNS, "num_acciones", "acciones_asignadas"]
     edited = st.data_editor(
         filtered[editable_cols],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         disabled=["contacto_id", "num_acciones", "acciones_asignadas"],
         key="contacts_editor",
@@ -4183,7 +4182,7 @@ def render_evolution(df: pd.DataFrame, all_data: pd.DataFrame, history: pd.DataF
     st.metric("Modificaciones registradas", len(filtered_changes))
     st.dataframe(
         filtered_changes[["Quién", "Actividad", "Fecha", "Qué ha modificado", "Detalle del cambio"]],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         column_config={
             "Actividad": st.column_config.TextColumn("Qué actividad", width="large"),
@@ -4559,7 +4558,7 @@ def render_task_reminder_admin(data: pd.DataFrame, engine: Engine) -> None:
     c3.metric("Avisos ya enviados", len(sent_keys))
 
     if pending:
-        st.dataframe(pd.DataFrame(pending)[["accion_titulo", "proximos_pasos", "responsable_seguimiento", "fecha_vencimiento", "estado"]], use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(pending)[["accion_titulo", "proximos_pasos", "responsable_seguimiento", "fecha_vencimiento", "estado"]], width="stretch", hide_index=True)
     if st.button("Comprobar y enviar avisos pendientes", key="send_overdue_task_reminders_admin"):
         sent, errors = send_overdue_task_reminders(engine, data, force=False)
         if sent:
@@ -4573,7 +4572,7 @@ def render_task_reminder_admin(data: pd.DataFrame, engine: Engine) -> None:
     reminders = get_task_email_reminders(engine)
     if not reminders.empty:
         st.markdown("#### Últimos avisos registrados")
-        st.dataframe(reminders.head(30), use_container_width=True, hide_index=True)
+        st.dataframe(reminders.head(30), width="stretch", hide_index=True)
 
 def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> None:
     st.subheader("Administración")
@@ -4586,7 +4585,7 @@ def render_admin(data: pd.DataFrame, history: pd.DataFrame, engine: Engine) -> N
     if access_log.empty:
         st.info("Todavía no hay accesos registrados.")
     else:
-        st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), use_container_width=True, hide_index=True)
+        st.dataframe(clean_interface_dataframe(access_log[["perfil", "role", "scope", "logged_at"]].head(50)), width="stretch", hide_index=True)
     render_task_reminder_admin(data, engine)
     render_questionnaire_results(engine)
     st.info("Para uso compartido real, configura DATABASE_URL con Supabase/PostgreSQL en los Secrets de Streamlit Cloud. Las contraseñas de perfiles pueden cambiarse desde Secrets.")
